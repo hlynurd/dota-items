@@ -110,9 +110,7 @@ export interface TeamItemEntry {
 }
 
 export interface TeamItemsResult {
-  top_by_winrate: TeamItemEntry[];
-  top_by_lift: TeamItemEntry[];
-  top_by_purchase: TeamItemEntry[];
+  all_items: TeamItemEntry[];
 }
 
 export interface AgentResponse {

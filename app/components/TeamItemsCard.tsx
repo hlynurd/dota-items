@@ -1,5 +1,10 @@
+"use client";
+
+import { useState, useMemo } from "react";
 import type { TeamItemsResult, TeamItemEntry } from "@/lib/agent/types";
 import { itemImgUrl } from "@/lib/utils/cdn";
+
+type SortKey = "purchase_lift" | "lineup_wr" | "lift" | "games";
 
 function ItemRow({ item }: { item: TeamItemEntry }) {
   const wrPct = (item.lineup_wr * 100).toFixed(1);
@@ -20,7 +25,7 @@ function ItemRow({ item }: { item: TeamItemEntry }) {
         />
       </div>
       <span className="text-sm text-zinc-300 truncate flex-1 min-w-0">{item.display_name}</span>
-      <span className={`text-sm font-mono shrink-0 ${purchaseColor}`}>
+      <span className={`text-sm font-mono shrink-0 w-10 text-right ${purchaseColor}`}>
         {item.purchase_lift.toFixed(1)}x
       </span>
       <span className="text-xs font-mono text-zinc-400 shrink-0 w-14 text-right">
@@ -36,7 +41,55 @@ function ItemRow({ item }: { item: TeamItemEntry }) {
   );
 }
 
+function SortHeader({
+  label,
+  sortKey,
+  active,
+  ascending,
+  onClick,
+  className,
+}: {
+  label: string;
+  sortKey: SortKey;
+  active: boolean;
+  ascending: boolean;
+  onClick: (key: SortKey) => void;
+  className?: string;
+}) {
+  const arrow = active ? (ascending ? " \u25B2" : " \u25BC") : "";
+  return (
+    <button
+      onClick={() => onClick(sortKey)}
+      className={`text-right hover:text-zinc-300 transition-colors cursor-pointer select-none ${active ? "text-zinc-300" : ""} ${className ?? ""}`}
+    >
+      {label}{arrow}
+    </button>
+  );
+}
+
 export default function TeamItemsCard({ data }: { data: TeamItemsResult }) {
+  const [sortKey, setSortKey] = useState<SortKey>("purchase_lift");
+  const [ascending, setAscending] = useState(false);
+
+  function handleSort(key: SortKey) {
+    if (key === sortKey) {
+      setAscending(!ascending);
+    } else {
+      setSortKey(key);
+      setAscending(false);
+    }
+  }
+
+  const sorted = useMemo(() => {
+    const items = [...data.all_items];
+    items.sort((a, b) => {
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      return ascending ? av - bv : bv - av;
+    });
+    return items;
+  }, [data.all_items, sortKey, ascending]);
+
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
       <div className="p-4 border-b border-zinc-800">
@@ -44,21 +97,23 @@ export default function TeamItemsCard({ data }: { data: TeamItemsResult }) {
           Team Item Analysis
         </h2>
         <p className="text-xs text-zinc-600 mt-1">
-          Items most bought against their lineup, with win rate and lift vs baseline
+          Click column headers to sort. Shows all items with data against their lineup.
         </p>
       </div>
       <div className="p-4">
         <div className="flex items-center gap-2 pb-2 mb-1 border-b border-zinc-800 text-xs text-zinc-600 font-mono">
           <span className="w-8 shrink-0" />
           <span className="flex-1">Item</span>
-          <span className="shrink-0 w-10 text-right">Buy</span>
-          <span className="shrink-0 w-14 text-right">WR</span>
-          <span className="shrink-0 w-14 text-right">Lift</span>
-          <span className="shrink-0 w-10 text-right">N</span>
+          <SortHeader label="Buy" sortKey="purchase_lift" active={sortKey === "purchase_lift"} ascending={ascending} onClick={handleSort} className="shrink-0 w-10" />
+          <SortHeader label="WR" sortKey="lineup_wr" active={sortKey === "lineup_wr"} ascending={ascending} onClick={handleSort} className="shrink-0 w-14" />
+          <SortHeader label="Lift" sortKey="lift" active={sortKey === "lift"} ascending={ascending} onClick={handleSort} className="shrink-0 w-14" />
+          <SortHeader label="N" sortKey="games" active={sortKey === "games"} ascending={ascending} onClick={handleSort} className="shrink-0 w-10" />
         </div>
-        {data.top_by_purchase.map((item) => (
-          <ItemRow key={item.item_id} item={item} />
-        ))}
+        <div className="max-h-[600px] overflow-y-auto">
+          {sorted.map((item) => (
+            <ItemRow key={item.item_id} item={item} />
+          ))}
+        </div>
       </div>
     </div>
   );

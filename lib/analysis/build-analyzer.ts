@@ -340,11 +340,10 @@ function analyzeTeamItemsFromData(
     });
   }
 
-  const byWinrate = [...entries].sort((a, b) => b.lineup_wr - a.lineup_wr).slice(0, 30);
-  const byLift = [...entries].sort((a, b) => b.lift - a.lift).slice(0, 30);
-  const byPurchase = [...entries].sort((a, b) => b.purchase_lift - a.purchase_lift).slice(0, 30);
+  // Default sort: purchase lift descending
+  entries.sort((a, b) => b.purchase_lift - a.purchase_lift);
 
-  return { top_by_winrate: byWinrate, top_by_lift: byLift, top_by_purchase: byPurchase };
+  return { all_items: entries };
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────

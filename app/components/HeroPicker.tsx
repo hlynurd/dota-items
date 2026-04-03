@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import type { OpenDotaHero } from "@/lib/opendota/types";
 import { heroImgUrl } from "@/lib/utils/cdn";
+import { matchesAlias } from "@/lib/opendota/hero-aliases";
 
 const ATTR_LABELS: Record<string, string> = {
   str: "Strength",
@@ -34,7 +35,9 @@ export default function HeroPicker({ heroes, excludeIds, onSelect, onClose }: Pr
 
   const filtered = query.trim()
     ? available.filter((h) =>
-        h.localized_name.toLowerCase().includes(query.toLowerCase())
+        h.localized_name.toLowerCase().includes(query.toLowerCase()) ||
+        h.name.toLowerCase().includes(query.toLowerCase()) ||
+        matchesAlias(h.id, query.trim())
       )
     : null; // null means show grouped view
 
