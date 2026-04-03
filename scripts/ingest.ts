@@ -108,18 +108,18 @@ async function fetchJson<T>(url: string, retries = 3): Promise<T> {
 }
 
 async function fetchComponentSet(): Promise<Set<string>> {
-  const itemsMap = await fetchJson<Record<string, { components: string[] | null }>>(
+  const itemsMap = await fetchJson<Record<string, { components: string[] | null; cost: number }>>(
     `${OPENDOTA}/constants/items`
   );
-  // Collect every item name that appears as a component of another item
   const components = new Set<string>();
   for (const item of Object.values(itemsMap)) {
     for (const c of item.components ?? []) components.add(c);
   }
-  // Keep items that have components themselves — they're real standalone items
-  // that happen to be upgradeable (Eul's → Wind Waker, Shadow Blade → Silver Edge, etc.)
+  // Keep items that are crafted (have components) AND cost >= 2000 gold.
+  // Cheap intermediates (Perseverance, Buckler) stay filtered.
+  // Real items (Eul's 2625, Shadow Blade 3000) are kept.
   for (const [name, item] of Object.entries(itemsMap)) {
-    if (item.components && item.components.length > 0) {
+    if (item.components && item.components.length > 0 && item.cost >= 2000) {
       components.delete(name);
     }
   }

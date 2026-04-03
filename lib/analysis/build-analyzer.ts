@@ -33,16 +33,20 @@ function resolveItem(
   };
 }
 
+const MIN_ITEM_COST = 2000; // items below this that are components are always upgraded
+
 function buildComponentSet(itemsMap: OpenDotaItemsMap): Set<string> {
   // Collect every item name that appears as a component of another item
   const components = new Set<string>();
   for (const item of Object.values(itemsMap)) {
     for (const c of item.components ?? []) components.add(c);
   }
-  // Keep items that have components themselves — they're real standalone items
-  // that happen to be upgradeable (Eul's → Wind Waker, Shadow Blade → Silver Edge, etc.)
+  // Keep items that are crafted (have components) AND cost >= 2000 gold.
+  // Cheap intermediates like Perseverance (1700), Buckler (200), Oblivion Staff (1500)
+  // are always upgraded and should stay filtered. Real items like Eul's (2625),
+  // Shadow Blade (3000), Maelstrom (2700) are kept.
   for (const [name, item] of Object.entries(itemsMap)) {
-    if (item.components && item.components.length > 0) {
+    if (item.components && item.components.length > 0 && item.cost >= MIN_ITEM_COST) {
       components.delete(name);
     }
   }
@@ -119,13 +123,10 @@ function buildPhaseItems(
   itemsMap: OpenDotaItemsMap,
   componentSet: Set<string>
 ): ItemRecommendation[] {
-  // All items with DB data + popularity bucket — every item the hero has bought is eligible
-  const candidateIds = new Set([
-    ...topItemsFromBucket(bucket, Infinity).map((i) => i.item_id),
-    ...overallByItem.keys(),
-  ]);
+  const candidates = topItemsFromBucket(bucket, Infinity);
 
-  return [...candidateIds]
+  return candidates
+    .map((c) => c.item_id)
     .filter((item_id) => {
       const entry = Object.entries(itemsMap).find(([, item]) => item.id === item_id);
       return entry ? !componentSet.has(entry[0]) : false;
@@ -203,20 +204,14 @@ async function analyzeHero(
   const timing_winrates: TimingBucket[] = TIMING.map(({ before_minute, bucket }) => {
     const { overallByItem, vsEnemyByItem } = buildWrIndex(dbRows, enemies, before_minute);
 
-    // All items with DB data for this timing bucket + popularity bucket
-    const candidateIds = new Set([
-      ...topItemsFromBucket(bucket, Infinity).map((i) => i.item_id),
-      ...overallByItem.keys(),
-    ]);
-
     return {
       before_minute,
-      top_items: [...candidateIds]
-        .filter((item_id) => {
+      top_items: topItemsFromBucket(bucket, Infinity)
+        .filter(({ item_id }) => {
           const entry = Object.entries(itemsMap).find(([, item]) => item.id === item_id);
           return entry ? !componentSet.has(entry[0]) : false;
         })
-        .map((item_id) => {
+        .map(({ item_id }) => {
           const overall = overallByItem.get(item_id);
           const win_rate = overall && overall.games > 0
             ? Math.round((overall.wins / overall.games) * 1000) / 1000
@@ -225,7 +220,7 @@ async function analyzeHero(
           const { debug } = computeLineupScore(item_id, enemies, vsEnemyByItem, pairwiseWinRates);
           return { item_id, ...resolveItem(itemsMap, item_id), win_rate, overall_games, debug };
         })
-        .sort((a, b) => b.win_rate - a.win_rate)
+        .filter((item) => item.overall_games >= 3) // skip 1-game 100% noise
         .slice(0, 3),
     };
   });
