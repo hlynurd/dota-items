@@ -15,10 +15,12 @@ A web app where users input two Dota 2 teams (5v5) and an AI agent recommends op
 
 ```
 app/
-  page.tsx                    # Main UI: draft board + results
+  page.tsx                    # Main UI: draft board + results + chat window
   api/
     analyze/
       route.ts                # POST endpoint — runs agent, streams response
+    chat/
+      route.ts                # POST endpoint — chat agent with draft context, streams response
 lib/
   opendota/
     client.ts                 # Typed fetch wrappers for OpenDota API
@@ -41,9 +43,12 @@ docs/
 
 - `Hero` — id, name, attribute, position (1-5 | null)
 - `DraftInput` — radiant: Hero[], dire: Hero[]
-- `ItemRecommendation` — item_id, item_name, win_rate, confidence, justification
+- `ItemRecommendation` — item_id, item_name, base_win_rate, matchup_delta, confidence (no justification — that's chat-only)
+- `TimingBucket` — before_minute, top_items with base_win_rate + matchup_delta each
 - `HeroBuild` — hero + phases (starting/early/core/situational) + timing_winrates
 - `AgentResponse` — HeroBuild[] for all heroes in the draft
+- `ChatMessage` — role ("user" | "assistant") + content
+- `ChatContext` — draft + builds (full context passed to the chat agent)
 
 ## Key Conventions
 
@@ -71,3 +76,5 @@ ANTHROPIC_API_KEY=       # Claude API key
 - Do not use `any` types — define proper interfaces
 - Do not fetch Dota data from the frontend — all data fetching goes through API routes
 - Do not block on all 10 heroes before streaming — stream hero builds one at a time
+- Do not generate per-item LLM justifications in the analyze route — that is chat-only, on demand
+- The chat route receives the full `ChatContext` (draft + builds) so it has everything needed to explain any recommendation

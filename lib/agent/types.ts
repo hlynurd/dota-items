@@ -31,9 +31,9 @@ export interface ItemRecommendation {
   item_id: number;
   item_name: string; // internal name, e.g. "blink"
   display_name: string; // e.g. "Blink Dagger"
-  win_rate: number; // 0–1
+  base_win_rate: number;    // 0–1, general win rate on this hero regardless of matchup
+  matchup_delta: number;    // signed float, e.g. +0.04 means +4% better in this specific matchup
   confidence: Confidence;
-  justification: string; // one sentence from agent
 }
 
 export interface TimingBucket {
@@ -42,8 +42,23 @@ export interface TimingBucket {
     item_id: number;
     item_name: string;
     display_name: string;
-    win_rate: number;
+    base_win_rate: number;
+    matchup_delta: number;
   }[];
+}
+
+// Chat window types
+export type ChatRole = "user" | "assistant";
+
+export interface ChatMessage {
+  role: ChatRole;
+  content: string;
+}
+
+// Context passed to the chat agent so it knows the current draft + builds
+export interface ChatContext {
+  draft: DraftInput;
+  builds: HeroBuild[];
 }
 
 export interface HeroBuild {

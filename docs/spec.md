@@ -53,13 +53,15 @@ Broken into 4 game phases:
 ### Per-Item Display
 - Item icon (Valve CDN)
 - Item name
-- **Win rate bar** — color-coded confidence indicator showing win rate for this item in this matchup context
-- **"Why" justification** — one sentence from the agent explaining the recommendation in context of the specific enemy lineup
+- **Base win rate** — the item's general win rate on this hero across all games
+- **Matchup delta** — how much this specific enemy/ally composition shifts that win rate (e.g. `+4.2%` in green or `-1.8%` in red)
+- No per-item LLM justification shown by default — explanations are on-demand via the chat window
 
 ### Win Rate Timeline
 Below the build, a section: **"Highest win rate items by minute"**
 - Buckets: before min 5 / min 10 / min 20 / min 30 / min 40 / min 50
-- Shows top 3 items per bucket for this hero in the current matchup
+- Shows top 3 items per bucket for this hero
+- Each item shows **base win rate** + **matchup delta**
 - Data-driven from OpenDota match statistics
 
 ---
@@ -77,36 +79,37 @@ Claude is used as an agent with tool use (not just a prompt).
 
 ### Agent output (structured JSON):
 ```typescript
-{
-  hero_id: number,
-  hero_name: string,
-  position: 1 | 2 | 3 | 4 | 5 | null,
-  phases: {
-    starting: ItemRecommendation[],
-    early: ItemRecommendation[],
-    core: ItemRecommendation[],
-    situational: ItemRecommendation[],
-  },
-  timing_winrates: TimingBucket[],
-}
-
 ItemRecommendation: {
   item_id: number,
   item_name: string,
-  win_rate: number,        // 0-1
+  display_name: string,
+  base_win_rate: number,    // 0–1, general win rate on this hero
+  matchup_delta: number,    // signed float, e.g. +0.04 = +4% better in this matchup
   confidence: "high" | "medium" | "low",
-  justification: string,  // one sentence, context-aware
 }
 
 TimingBucket: {
-  before_minute: number,  // 5, 10, 20, 30, 40, 50
-  top_items: { item_id: number, item_name: string, win_rate: number }[],
+  before_minute: 5 | 10 | 20 | 30 | 40 | 50,
+  top_items: { item_id, item_name, display_name, base_win_rate, matchup_delta }[],
 }
 ```
 
 ### Streaming
 - Response streams to the UI — hero cards appear one by one as the agent finishes each
 - UI shows a "thinking" indicator while agent is calling tools
+
+---
+
+## Chat Window
+
+A persistent chat panel visible after the draft analysis runs.
+
+- User can ask questions like: *"Why do you recommend BKB on Anti-Mage?"* or *"What should I buy if I'm getting stomped by Axe?"*
+- The chat agent has full context: the current draft, both teams, all builds, and the underlying win rate data
+- Responses stream in real time
+- Chat history is kept for the session (no persistence across page reloads)
+- Separate API route: `POST /api/chat` — accepts `{ messages: ChatMessage[], context: ChatContext }`
+- The chat agent can call the same tools as the analysis agent to look up fresh data if needed
 
 ---
 
