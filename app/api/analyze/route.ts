@@ -3,7 +3,31 @@ import type { DraftInput } from "@/lib/agent/types";
 
 export const dynamic = "force-dynamic";
 
+// ─── Rate limiting ────────────────────────────────────────────────────────────
+// Simple in-memory sliding window: 5 requests per IP per 60s.
+// Not perfect across serverless instances but protects against single-client abuse.
+const WINDOW_MS = 60_000;
+const MAX_REQUESTS = 5;
+const requestLog = new Map<string, number[]>();
+
+function isRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const timestamps = (requestLog.get(ip) ?? []).filter((t) => now - t < WINDOW_MS);
+  if (timestamps.length >= MAX_REQUESTS) return true;
+  timestamps.push(now);
+  requestLog.set(ip, timestamps);
+  return false;
+}
+
 export async function POST(req: Request): Promise<Response> {
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+  if (isRateLimited(ip)) {
+    return new Response(JSON.stringify({ error: "Too many requests — wait a minute and try again." }), {
+      status: 429,
+      headers: { "Content-Type": "application/json", "Retry-After": "60" },
+    });
+  }
+
   const body = (await req.json()) as { draft: DraftInput };
   const { draft } = body;
 
