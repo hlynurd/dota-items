@@ -1,36 +1,39 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Dota 2 Itemization Advisor
 
-## Getting Started
+AI-assisted item recommendations for any Dota 2 draft. Pick your heroes, see what to buy.
 
-First, run the development server:
+## What it does
+
+Enter a 5v5 draft (or any partial lineup) and get data-driven item recommendations for each hero, broken down by game phase (Starting → Early → Core → Situational). Items are ranked by purchase popularity from real matches, with win rate stats adjusted for the specific enemy lineup.
+
+A chat panel lets you ask follow-up questions like *"Why is BKB recommended here?"* — answered by Claude with full draft context.
+
+## How it works
+
+- **Analysis**: Fully deterministic — fetches live data from the [OpenDota API](https://www.opendota.com/), does the math locally. No LLM involved, no API cost per analysis, ~1s for a full 10-hero draft.
+- **Chat**: Claude Sonnet answers on-demand questions about the builds. Only costs API credits when you ask something.
+- **Data**: Item popularity and hero matchup win rates from OpenDota (free, no key required).
+
+## Running locally
+
+```bash
+npm install
+```
+
+Add your Anthropic API key to `.env.local`:
+```
+ANTHROPIC_API_KEY=sk-ant-...
+```
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Stack
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [Next.js 16](https://nextjs.org) (App Router, TypeScript)
+- [Tailwind CSS v4](https://tailwindcss.com)
+- [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-typescript) — chat only
+- [OpenDota API](https://docs.opendota.com) — all Dota data
