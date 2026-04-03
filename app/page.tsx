@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { getHeroes } from "@/lib/opendota/client";
 import type { OpenDotaHero } from "@/lib/opendota/types";
-import { runAggregate, runMarginalAggregate } from "@/scripts/aggregate";
+import { runMarginalAggregate } from "@/scripts/aggregate";
 import DraftApp from "./components/DraftApp";
 
 export default async function Page() {
@@ -9,7 +9,7 @@ export default async function Page() {
   // after() runs after the response is sent — does not block rendering.
   after(async () => {
     try {
-      await Promise.all([runAggregate(), runMarginalAggregate()]);
+      await runMarginalAggregate();
     } catch (err) {
       console.error("[page] Background aggregate failed:", err);
     }

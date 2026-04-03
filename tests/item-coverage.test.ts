@@ -130,26 +130,6 @@ describe("component filter", () => {
 import { db } from "@/lib/db/client";
 import { sql } from "drizzle-orm";
 
-describe("DB item data (hero-specific, legacy)", () => {
-  it("Eul's (item 100) has win rate data for Warlock (hero 37)", async () => {
-    const res = await db.execute<{ games: number }>(sql`
-      SELECT games FROM item_win_rates
-      WHERE hero_id = 37 AND item_id = 100 AND opponent_hero_id = -1 AND before_minute = 999
-    `);
-    expect(res.rows.length).toBe(1);
-    expect(res.rows[0].games).toBeGreaterThan(0);
-  });
-
-  it("Shadow Blade (item 152) has data for Slark (hero 93)", async () => {
-    const res = await db.execute<{ games: number }>(sql`
-      SELECT games FROM item_win_rates
-      WHERE hero_id = 93 AND item_id = 152 AND opponent_hero_id = -1 AND before_minute = 999
-    `);
-    expect(res.rows.length).toBe(1);
-    expect(res.rows[0].games).toBeGreaterThan(0);
-  });
-});
-
 describe("DB marginal data", () => {
   it("Eul's (item 100) has marginal data vs Axe (hero 2)", async () => {
     const res = await db.execute<{ games: number }>(sql`

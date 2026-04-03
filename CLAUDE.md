@@ -40,8 +40,8 @@ lib/
     build-analyzer.ts         # Deterministic build pipeline (no LLM)
   db/
     client.ts                 # Drizzle + Neon client (lazy init, DATABASE_URL)
-    schema.ts                 # matches, item_timings, item_win_rates tables
-    queries.ts                # getItemWinRatesForHero() — single query per hero
+    schema.ts                 # matches, item_timings, item_marginal_win_rates, item_baseline_win_rates tables
+    queries.ts                # getItemMarginals(), getItemBaselines() — marginal/baseline queries
   opendota/
     client.ts                 # Typed fetch wrappers for OpenDota API (1hr cache)
     types.ts                  # Raw OpenDota API response types
@@ -55,7 +55,7 @@ lib/
     cdn.ts                    # Valve CDN URL helpers for hero/item images
 scripts/
   ingest.ts                   # Fetch parsedMatches → filter Ancient+ ranked → insert to DB
-  aggregate.ts                # Join item_timings + matches → compute item_win_rates
+  aggregate.ts                # Join item_timings + matches → compute marginal/baseline win rates
 docs/
   spec.md                     # Full feature spec
 drizzle.config.ts             # Drizzle Kit config (reads DATABASE_URL)
@@ -78,7 +78,7 @@ vercel.json                   # Cron schedule config
 `lib/analysis/build-analyzer.ts` runs all heroes in parallel:
 
 1. Fetch `itemPopularity` + `matchups` from OpenDota for each hero
-2. Fetch pre-aggregated item win rates from Neon DB (`item_win_rates` table) — one query per hero
+2. Fetch pre-aggregated marginal/baseline win rates from Neon DB — one query for all context heroes
 3. `overall_win_rate` for each item = wins/games from DB (opponent_hero_id = -1 rows)
 4. `win_rate` for each item = Bayesian-smoothed average across all 5 enemies:
    - For each enemy: `smoothed_wr = (wins_vs_enemy + 50 × pairwise_wr) / (games_vs_enemy + 50)`
@@ -93,7 +93,8 @@ vercel.json                   # Cron schedule config
 
 - `matches` — match_id, start_time, radiant_win, avg_rank_tier, radiant_0..4, dire_0..4
 - `item_timings` — match_id, hero_id, item_id, time_s, won (PK: match_id+hero_id+item_id)
-- `item_win_rates` — hero_id, item_id, opponent_hero_id (-1=overall), before_minute, games, wins (PK: all four)
+- `item_marginal_win_rates` — item_id, context_hero_id, context_side, before_minute, games, wins (PK: all four)
+- `item_baseline_win_rates` — item_id, before_minute, games, wins (PK: item_id+before_minute)
 
 ## Data Pipeline
 
@@ -108,7 +109,7 @@ vercel.json                   # Cron schedule config
 - Joins item_timings + matches to derive opponent heroes per row
 - Accumulates (hero, item, opponent, before_minute) → games/wins
 - before_minute buckets: 10, 20, 30, 40, 50, 999 (999 = any time = broadest sample)
-- Upserts into item_win_rates in batches of 500
+- Upserts into item_marginal_win_rates and item_baseline_win_rates in batches of 500
 
 ## Role Assignment
 

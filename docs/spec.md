@@ -64,7 +64,7 @@ Items are ranked by matchup-adjusted win rate (not popularity).
 `lib/analysis/build-analyzer.ts`, all heroes in parallel:
 
 1. Fetch `itemPopularity` + `matchups` from OpenDota (1hr cached)
-2. Single DB query per hero: all `item_win_rates` rows for this hero × these enemies
+2. Fetch marginal/baseline win rates from DB — one query for all context heroes
 3. Build overallByItem (opponent=-1) and vsEnemyByItem maps per timing bucket
 4. **Bayesian smoothing** K=50 per item × per enemy:
    `smoothed_wr = (wins_vs_enemy + 50 × pairwise_wr) / (games_vs_enemy + 50)`
@@ -84,20 +84,20 @@ Items are ranked by matchup-adjusted win rate (not popularity).
 - Prunes rows older than 7 days
 
 ### Aggregate (hourly at :30 via Vercel Cron → /api/cron/aggregate)
-- Joins item_timings + matches, derives opponent heroes
-- Accumulates (hero, item, opponent, before_minute) → games/wins
-- opponent_hero_id = -1 means overall baseline
+- Joins item_timings + matches, derives opponent and ally heroes
+- Accumulates marginal (item, context_hero, side, before_minute) and baseline (item, before_minute) → games/wins
 - before_minute buckets: 10, 20, 30, 40, 50, 999 (any time)
-- Full upsert into item_win_rates
+- Full upsert into item_marginal_win_rates and item_baseline_win_rates
 
 ---
 
 ## DB Schema
 
 ```
-matches        (match_id PK, start_time, radiant_win, avg_rank_tier, radiant_0..4, dire_0..4)
-item_timings   (match_id, hero_id, item_id, time_s, won) PK: all three ids
-item_win_rates (hero_id, item_id, opponent_hero_id, before_minute, games, wins) PK: all four
+matches                  (match_id PK, start_time, radiant_win, avg_rank_tier, radiant_0..4, dire_0..4)
+item_timings             (match_id, hero_id, item_id, time_s, won) PK: all three ids
+item_marginal_win_rates  (item_id, context_hero_id, context_side, before_minute, games, wins) PK: all four
+item_baseline_win_rates  (item_id, before_minute, games, wins) PK: item_id+before_minute
 ```
 
 Hosted on Neon (serverless Postgres). Accessed via Drizzle ORM.

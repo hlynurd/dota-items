@@ -39,26 +39,11 @@ export const item_timings = pgTable("item_timings", {
   won:      boolean("won").notNull(),
 }, (t) => [primaryKey({ columns: [t.match_id, t.hero_id, t.item_id] })]);
 
-// ─── Aggregated win rate table ────────────────────────────────────────────────
-
-// Pre-computed by aggregate.ts. Read directly by /api/analyze.
-// opponent_hero_id = -1 means "vs any opponent" (the overall baseline row).
-// before_minute bucket: item was completed before this many minutes into the game.
-export const item_win_rates = pgTable("item_win_rates", {
-  hero_id:          integer("hero_id").notNull(),
-  item_id:          integer("item_id").notNull(),
-  opponent_hero_id: integer("opponent_hero_id").notNull(), // -1 = overall baseline
-  before_minute:    integer("before_minute").notNull(),    // 10 | 20 | 30 | 40 | 50 | 999 (any time)
-  games:            integer("games").notNull(),
-  wins:             integer("wins").notNull(),
-  updated_at:       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [primaryKey({ columns: [t.hero_id, t.item_id, t.opponent_hero_id, t.before_minute] })]);
-
 // ─── Marginal win rate tables ─────────────────────────────────────────────────
 
 // Team-level item win rates conditioned on a context hero being present.
 // "When anyone buys item X and hero Y is on the enemy/ally team, what's the win rate?"
-// ~130x denser than hero-specific item_win_rates (no hero_id dimension).
+// Team-level: no hero_id dimension, so much denser than per-hero tables.
 export const item_marginal_win_rates = pgTable("item_marginal_win_rates", {
   item_id:          integer("item_id").notNull(),
   context_hero_id:  integer("context_hero_id").notNull(), // the enemy or ally hero
