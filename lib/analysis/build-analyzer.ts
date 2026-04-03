@@ -30,6 +30,19 @@ function resolveItem(
   };
 }
 
+/**
+ * Build a set of item names that appear as a component of any other item.
+ * These are "partial" items (Void Stone, Chainmail, etc.) and should be
+ * excluded from recommendations — we only want completed items.
+ */
+function buildComponentSet(itemsMap: OpenDotaItemsMap): Set<string> {
+  const components = new Set<string>();
+  for (const item of Object.values(itemsMap)) {
+    for (const c of item.components ?? []) components.add(c);
+  }
+  return components;
+}
+
 // ─── Smoothing ────────────────────────────────────────────────────────────────
 
 // K=50: with 0 real games vs enemy → pure pairwise fallback.
@@ -89,12 +102,19 @@ function buildPhaseItems(
   explorerData: Map<number, Map<number, ExplorerItemRow>>,
   pairwiseWinRates: Map<number, number>,
   overallWinRates: Map<number, ExplorerItemRow>,
-  itemsMap: OpenDotaItemsMap
+  itemsMap: OpenDotaItemsMap,
+  componentSet: Set<string>
 ): ItemRecommendation[] {
   // Use ALL items in the bucket, not just top-N — broader coverage
   const candidates = topItemsFromBucket(bucket, Infinity);
 
   return candidates
+    .filter(({ item_id }) => {
+      const entry = Object.entries(itemsMap).find(([, item]) => item.id === item_id);
+      if (!entry) return false;
+      // Drop items that are components of other items (Void Stone, Chainmail, etc.)
+      return !componentSet.has(entry[0]);
+    })
     .map(({ item_id }) => {
       const { win_rate, confidence, debug } = computeLineupScore(
         item_id, enemies, explorerData, pairwiseWinRates
@@ -158,12 +178,13 @@ async function analyzeHero(
   const avgVsEnemies = enemyWrs.length > 0 ? enemyWrs.reduce((s, w) => s + w, 0) / enemyWrs.length : overallWinRate;
   const matchupDelta = Math.round((avgVsEnemies - overallWinRate) * 1000) / 1000;
 
+  const componentSet = buildComponentSet(itemsMap);
+
   // Phase items: all candidates in popularity bucket, re-ranked by lineup win rate
   const phases: HeroBuild["phases"] = {
-    starting:    buildPhaseItems(popularity.start_game_items,  6, enemies, explorerData, pairwiseWinRates, overallWinRates, itemsMap),
-    early:       buildPhaseItems(popularity.early_game_items,  6, enemies, explorerData, pairwiseWinRates, overallWinRates, itemsMap),
-    core:        buildPhaseItems(popularity.mid_game_items,    6, enemies, explorerData, pairwiseWinRates, overallWinRates, itemsMap),
-    situational: buildPhaseItems(popularity.late_game_items,   6, enemies, explorerData, pairwiseWinRates, overallWinRates, itemsMap),
+    early:       buildPhaseItems(popularity.early_game_items,  6, enemies, explorerData, pairwiseWinRates, overallWinRates, itemsMap, componentSet),
+    core:        buildPhaseItems(popularity.mid_game_items,    6, enemies, explorerData, pairwiseWinRates, overallWinRates, itemsMap, componentSet),
+    situational: buildPhaseItems(popularity.late_game_items,   6, enemies, explorerData, pairwiseWinRates, overallWinRates, itemsMap, componentSet),
   };
 
   // Timing buckets: real overall win rates + per-enemy debug
@@ -178,7 +199,13 @@ async function analyzeHero(
 
   const timing_winrates: TimingBucket[] = TIMING.map(({ before_minute, bucket }) => ({
     before_minute,
-    top_items: topItemsFromBucket(bucket, 3).map(({ item_id }) => {
+    top_items: topItemsFromBucket(bucket, Infinity)
+      .filter(({ item_id }) => {
+        const entry = Object.entries(itemsMap).find(([, item]) => item.id === item_id);
+        return entry ? !componentSet.has(entry[0]) : false;
+      })
+      .slice(0, 3)
+      .map(({ item_id }) => {
       const overall = overallWinRates.get(item_id);
       const win_rate = overall && overall.games > 0
         ? Math.round((overall.wins / overall.games) * 1000) / 1000

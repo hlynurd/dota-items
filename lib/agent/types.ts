@@ -76,7 +76,6 @@ export interface HeroBuild {
   hero: Hero;
   matchup_delta: number; // signed float — hero's win rate delta vs this specific enemy lineup
   phases: {
-    starting: ItemRecommendation[];
     early: ItemRecommendation[];
     core: ItemRecommendation[];
     situational: ItemRecommendation[];

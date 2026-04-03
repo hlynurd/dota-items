@@ -4,7 +4,6 @@ import { heroImgUrl, itemImgUrl } from "@/lib/utils/cdn";
 import ItemChip from "./ItemChip";
 
 const PHASES: { key: keyof HeroBuild["phases"]; label: string }[] = [
-  { key: "starting", label: "Starting Items" },
   { key: "early", label: "Early Game" },
   { key: "core", label: "Core" },
   { key: "situational", label: "Situational / Late" },
