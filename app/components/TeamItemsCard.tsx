@@ -4,13 +4,15 @@ import { useState, useMemo } from "react";
 import type { TeamItemsResult, TeamItemEntry } from "@/lib/agent/types";
 import { itemImgUrl } from "@/lib/utils/cdn";
 
-type SortKey = "purchase_lift" | "lineup_wr" | "lift" | "games";
+type SortKey = "purchase_lift" | "wr_with" | "wr_without" | "wr_diff" | "match_games";
 
 function ItemRow({ item }: { item: TeamItemEntry }) {
-  const wrPct = (item.lineup_wr * 100).toFixed(1);
-  const liftPct = (Math.abs(item.lift) * 100).toFixed(1);
-  const liftSign = item.lift >= 0 ? "+" : "-";
-  const liftColor = item.lift >= 0.005 ? "text-green-400" : item.lift <= -0.005 ? "text-red-400" : "text-zinc-600";
+  const wrWithPct = (item.wr_with * 100).toFixed(1);
+  const wrWithoutPct = (item.wr_without * 100).toFixed(1);
+  const diff = item.wr_with - item.wr_without;
+  const diffPct = (Math.abs(diff) * 100).toFixed(1);
+  const diffSign = diff >= 0 ? "+" : "-";
+  const diffColor = diff >= 0.005 ? "text-green-400" : diff <= -0.005 ? "text-red-400" : "text-zinc-600";
   const purchaseColor = item.purchase_lift >= 1.2 ? "text-green-400" : item.purchase_lift <= 0.8 ? "text-red-400" : "text-zinc-400";
 
   return (
@@ -25,17 +27,20 @@ function ItemRow({ item }: { item: TeamItemEntry }) {
         />
       </div>
       <span className="text-sm text-zinc-300 truncate flex-1 min-w-0">{item.display_name}</span>
-      <span className={`text-sm font-mono shrink-0 w-10 text-right ${purchaseColor}`}>
+      <span className={`text-xs font-mono shrink-0 w-12 text-right ${purchaseColor}`}>
         {item.purchase_lift.toFixed(1)}x
       </span>
       <span className="text-xs font-mono text-zinc-400 shrink-0 w-14 text-right">
-        {wrPct}%
+        {wrWithPct}%
       </span>
-      <span className={`text-xs font-mono shrink-0 w-14 text-right ${liftColor}`}>
-        {liftSign}{liftPct}%
+      <span className="text-xs font-mono text-zinc-500 shrink-0 w-14 text-right">
+        {wrWithoutPct}%
+      </span>
+      <span className={`text-xs font-mono shrink-0 w-14 text-right ${diffColor}`}>
+        {diffSign}{diffPct}%
       </span>
       <span className="text-xs text-zinc-600 font-mono shrink-0 w-10 text-right">
-        ({item.games})
+        ({item.match_games})
       </span>
     </div>
   );
@@ -83,8 +88,8 @@ export default function TeamItemsCard({ data }: { data: TeamItemsResult }) {
   const sorted = useMemo(() => {
     const items = [...data.all_items];
     items.sort((a, b) => {
-      const av = a[sortKey];
-      const bv = b[sortKey];
+      const av = sortKey === "wr_diff" ? a.wr_with - a.wr_without : a[sortKey];
+      const bv = sortKey === "wr_diff" ? b.wr_with - b.wr_without : b[sortKey];
       return ascending ? av - bv : bv - av;
     });
     return items;
@@ -97,17 +102,18 @@ export default function TeamItemsCard({ data }: { data: TeamItemsResult }) {
           Team Item Analysis
         </h2>
         <p className="text-xs text-zinc-600 mt-1">
-          Click column headers to sort. Shows all items with data against their lineup.
+          Win rates when your team buys vs doesn&apos;t buy each item against their lineup
         </p>
       </div>
       <div className="p-4">
         <div className="flex items-center gap-2 pb-2 mb-1 border-b border-zinc-800 text-xs text-zinc-600 font-mono">
           <span className="w-8 shrink-0" />
           <span className="flex-1">Item</span>
-          <SortHeader label="Buy" sortKey="purchase_lift" active={sortKey === "purchase_lift"} ascending={ascending} onClick={handleSort} className="shrink-0 w-10" />
-          <SortHeader label="WR" sortKey="lineup_wr" active={sortKey === "lineup_wr"} ascending={ascending} onClick={handleSort} className="shrink-0 w-14" />
-          <SortHeader label="Lift" sortKey="lift" active={sortKey === "lift"} ascending={ascending} onClick={handleSort} className="shrink-0 w-14" />
-          <SortHeader label="N" sortKey="games" active={sortKey === "games"} ascending={ascending} onClick={handleSort} className="shrink-0 w-10" />
+          <SortHeader label="Buy" sortKey="purchase_lift" active={sortKey === "purchase_lift"} ascending={ascending} onClick={handleSort} className="shrink-0 w-12" />
+          <SortHeader label="With" sortKey="wr_with" active={sortKey === "wr_with"} ascending={ascending} onClick={handleSort} className="shrink-0 w-14" />
+          <SortHeader label="W/o" sortKey="wr_without" active={sortKey === "wr_without"} ascending={ascending} onClick={handleSort} className="shrink-0 w-14" />
+          <SortHeader label="Diff" sortKey="wr_diff" active={sortKey === "wr_diff"} ascending={ascending} onClick={handleSort} className="shrink-0 w-14" />
+          <SortHeader label="N" sortKey="match_games" active={sortKey === "match_games"} ascending={ascending} onClick={handleSort} className="shrink-0 w-10" />
         </div>
         <div className="max-h-[600px] overflow-y-auto">
           {sorted.map((item) => (

@@ -4,7 +4,7 @@
  */
 
 import { db } from "./client";
-import { item_marginal_win_rates, item_baseline_win_rates } from "./schema";
+import { item_marginal_win_rates, item_baseline_win_rates, context_hero_totals } from "./schema";
 import { inArray, sql } from "drizzle-orm";
 
 // ─── Marginal queries ────────────────────────────────────────────────────────
@@ -16,6 +16,15 @@ export interface ItemMarginalRow {
   before_minute: number;
   games: number;
   wins: number;
+  match_games: number;
+  match_wins: number;
+}
+
+export interface HeroTotalRow {
+  context_hero_id: number;
+  context_side: string;
+  total_matches: number;
+  total_wins: number;
 }
 
 export interface ItemBaselineRow {
@@ -40,9 +49,25 @@ export async function getItemMarginals(
       before_minute: item_marginal_win_rates.before_minute,
       games: item_marginal_win_rates.games,
       wins: item_marginal_win_rates.wins,
+      match_games: item_marginal_win_rates.match_games,
+      match_wins: item_marginal_win_rates.match_wins,
     })
     .from(item_marginal_win_rates)
     .where(inArray(item_marginal_win_rates.context_hero_id, contextHeroIds));
+}
+
+export async function getHeroTotals(
+  contextHeroIds: number[]
+): Promise<HeroTotalRow[]> {
+  return db
+    .select({
+      context_hero_id: context_hero_totals.context_hero_id,
+      context_side: context_hero_totals.context_side,
+      total_matches: context_hero_totals.total_matches,
+      total_wins: context_hero_totals.total_wins,
+    })
+    .from(context_hero_totals)
+    .where(inArray(context_hero_totals.context_hero_id, contextHeroIds));
 }
 
 /**

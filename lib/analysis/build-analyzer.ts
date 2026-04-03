@@ -4,8 +4,8 @@ import {
   getItemsMap,
   topItemsFromBucket,
 } from "../opendota/client";
-import { getItemMarginals, getItemBaselines } from "../db/queries";
-import type { ItemMarginalRow, ItemBaselineRow } from "../db/queries";
+import { getItemMarginals, getItemBaselines, getHeroTotals } from "../db/queries";
+import type { ItemMarginalRow, ItemBaselineRow, HeroTotalRow } from "../db/queries";
 import type { OpenDotaItemsMap } from "../opendota/types";
 import type {
   DraftInput,
@@ -266,13 +266,30 @@ function analyzeTeamItemsFromData(
   itemsMap: OpenDotaItemsMap,
   marginalRows: ItemMarginalRow[],
   baselineRows: ItemBaselineRow[],
+  heroTotals: HeroTotalRow[],
 ): TeamItemsResult {
   const enemyIdx = buildMarginalIndex(marginalRows, "enemy", 999);
   const basIdx = buildBaselineIndex(baselineRows, 999);
   const componentSet = buildComponentSet(itemsMap);
-
-  // Number of unique heroes in the pool (used for expected purchase rate)
   const NUM_HEROES = 130;
+
+  // Build match-level index: "item_id:enemy_id" → { match_games, match_wins }
+  const matchIdx = new Map<string, { match_games: number; match_wins: number }>();
+  for (const row of marginalRows) {
+    if (row.context_side !== "enemy" || row.before_minute !== 999) continue;
+    matchIdx.set(`${row.item_id}:${row.context_hero_id}`, {
+      match_games: row.match_games,
+      match_wins: row.match_wins,
+    });
+  }
+
+  // Hero totals: enemy_id → { total_matches, total_wins }
+  const totalsMap = new Map<number, { total_matches: number; total_wins: number }>();
+  for (const row of heroTotals) {
+    if (row.context_side === "enemy") {
+      totalsMap.set(row.context_hero_id, { total_matches: row.total_matches, total_wins: row.total_wins });
+    }
+  }
 
   const entries: TeamItemEntry[] = [];
   for (const [key, baseline] of basIdx.entries()) {
@@ -290,21 +307,44 @@ function analyzeTeamItemsFromData(
       item_id, enemies, enemyIdx, basIdx, "enemy"
     );
 
-    // Purchase lift: how much likelier this item is bought vs this lineup.
-    // Each purchase event has 5 enemies, so a random hero is enemy in 5/NUM_HEROES of events.
-    // expected_marginal = baseline_games * 5 / NUM_HEROES
-    // purchase_lift = actual_marginal / expected_marginal
+    // Purchase lift
     let purchaseLiftSum = 0;
     for (const enemy of enemies) {
       const marginal = enemyIdx.get(`${item_id}:${enemy.id}`);
-      const marginalGames = marginal?.games ?? 0;
       const expected = baseline.games * 5 / NUM_HEROES;
-      const ratio = expected > 0 ? marginalGames / expected : 1;
+      const ratio = expected > 0 ? (marginal?.games ?? 0) / expected : 1;
       purchaseLiftSum += ratio;
     }
     const purchaseLift = enemies.length > 0
       ? Math.round((purchaseLiftSum / enemies.length) * 100) / 100
       : 1;
+
+    // Match-level WR with/without (averaged across enemies)
+    let wrWithSum = 0, wrWithoutSum = 0, matchGamesSum = 0;
+    let validEnemies = 0;
+    for (const enemy of enemies) {
+      const ml = matchIdx.get(`${item_id}:${enemy.id}`);
+      const totals = totalsMap.get(enemy.id);
+      if (!ml || !totals || totals.total_matches === 0) continue;
+
+      const mg = ml.match_games;
+      const mw = ml.match_wins;
+      const tg = totals.total_matches;
+      const tw = totals.total_wins;
+
+      const wrWith = mg > 0 ? mw / mg : 0;
+      const withoutGames = tg - mg;
+      const wrWithout = withoutGames > 0 ? (tw - mw) / withoutGames : 0;
+
+      wrWithSum += wrWith;
+      wrWithoutSum += wrWithout;
+      matchGamesSum += mg;
+      validEnemies++;
+    }
+
+    const wrWith = validEnemies > 0 ? Math.round((wrWithSum / validEnemies) * 1000) / 1000 : 0.5;
+    const wrWithout = validEnemies > 0 ? Math.round((wrWithoutSum / validEnemies) * 1000) / 1000 : 0.5;
+    const matchGames = validEnemies > 0 ? Math.round(matchGamesSum / validEnemies) : 0;
 
     entries.push({
       item_id,
@@ -314,14 +354,15 @@ function analyzeTeamItemsFromData(
       lineup_wr: score,
       lift: Math.round((score - baselineWr) * 1000) / 1000,
       purchase_lift: purchaseLift,
+      wr_with: wrWith,
+      wr_without: wrWithout,
+      match_games: matchGames,
       games: enemies.length > 0 ? Math.round(totalGames / enemies.length) : 0,
       enemy_breakdown: debug,
     });
   }
 
-  // Default sort: purchase lift descending
   entries.sort((a, b) => b.purchase_lift - a.purchase_lift);
-
   return { all_items: entries };
 }
 
@@ -334,10 +375,11 @@ export async function analyzeDraft(
   const allHeroIds = allHeroes.map((h) => h.id);
 
   // Fetch shared data ONCE for the entire draft
-  const [itemsMap, marginalRows, baselineRows] = await Promise.all([
+  const [itemsMap, marginalRows, baselineRows, heroTotals] = await Promise.all([
     getItemsMap(),
     getItemMarginals(allHeroIds),
     getItemBaselines(),
+    getHeroTotals(allHeroIds),
   ]);
 
   const builds = await Promise.all(
@@ -351,7 +393,7 @@ export async function analyzeDraft(
 
   // Team-level item analysis (use radiant's perspective — enemies = dire)
   const teamItems = draft.dire.length > 0
-    ? analyzeTeamItemsFromData(draft.dire, itemsMap, marginalRows, baselineRows)
+    ? analyzeTeamItemsFromData(draft.dire, itemsMap, marginalRows, baselineRows, heroTotals)
     : null;
 
   return { builds, teamItems };

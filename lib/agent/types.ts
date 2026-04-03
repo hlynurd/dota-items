@@ -105,7 +105,10 @@ export interface TeamItemEntry {
   lineup_wr: number;        // marginal score vs this lineup
   lift: number;             // lineup_wr - baseline_wr
   purchase_lift: number;    // how much likelier this item is bought vs this lineup (1.0 = same, 2.0 = 2x)
-  games: number;            // avg games per enemy context
+  wr_with: number;          // match-level WR when your team bought this item vs this lineup
+  wr_without: number;       // match-level WR when your team did NOT buy this item vs this lineup
+  match_games: number;      // unique matches where item was bought vs this lineup
+  games: number;            // purchase-event-level avg games per enemy
   enemy_breakdown: MarginalDebugEntry[];
 }
 

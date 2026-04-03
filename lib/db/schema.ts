@@ -49,10 +49,22 @@ export const item_marginal_win_rates = pgTable("item_marginal_win_rates", {
   context_hero_id:  integer("context_hero_id").notNull(), // the enemy or ally hero
   context_side:     text("context_side").notNull(),        // 'enemy' | 'ally'
   before_minute:    integer("before_minute").notNull(),    // 10 | 20 | 30 | 40 | 50 | 999
-  games:            integer("games").notNull(),
+  games:            integer("games").notNull(),            // purchase-event-level count
   wins:             integer("wins").notNull(),
+  match_games:      integer("match_games").notNull().default(0), // match-level deduped: unique matches where item was bought
+  match_wins:       integer("match_wins").notNull().default(0),  // wins among those unique matches
   updated_at:       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [primaryKey({ columns: [t.item_id, t.context_hero_id, t.context_side, t.before_minute] })]);
+
+// Total matches per context hero — used to compute "WR when item NOT bought"
+// total_matches - match_games = matches where item was not bought
+export const context_hero_totals = pgTable("context_hero_totals", {
+  context_hero_id:  integer("context_hero_id").notNull(),
+  context_side:     text("context_side").notNull(),
+  total_matches:    integer("total_matches").notNull(),
+  total_wins:       integer("total_wins").notNull(),    // wins from the buyer's team perspective
+  updated_at:       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.context_hero_id, t.context_side] })]);
 
 // Unconditional item win rates — "when anyone buys item X, what's the win rate?"
 // Used as the baseline for computing diffs.
