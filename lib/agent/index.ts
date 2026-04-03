@@ -40,7 +40,7 @@ async function analyzeHero(
   while (true) {
     const response = await client.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 2048,
+      max_tokens: 8192,
       system: ANALYZE_SYSTEM_PROMPT,
       tools: toolDefinitions,
       messages,
@@ -71,9 +71,15 @@ async function analyzeHero(
         throw new Error(`Agent returned no text for ${hero.localized_name}`);
       }
 
-      // Strip any accidental markdown code fences
-      const raw = textBlock.text.trim().replace(/^```json\n?/, "").replace(/\n?```$/, "");
-      const parsed = JSON.parse(raw) as {
+      // Extract JSON — handle markdown fences, leading/trailing prose, and JS-style comments
+      const text = textBlock.text;
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error(`Agent returned no JSON for ${hero.localized_name}. Response: ${text.slice(0, 200)}`);
+      }
+      // Strip JS-style inline comments that Claude sometimes includes
+      const cleaned = jsonMatch[0].replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+      const parsed = JSON.parse(cleaned) as {
         phases: HeroBuild["phases"];
         timing_winrates: HeroBuild["timing_winrates"];
       };
