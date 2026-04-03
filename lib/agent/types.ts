@@ -40,7 +40,8 @@ export interface ItemRecommendation {
   item_id: number;
   item_name: string; // internal name, e.g. "blink"
   display_name: string; // e.g. "Blink Dagger"
-  win_rate: number;  // 0–1, smoothed win rate vs this specific enemy lineup
+  win_rate: number;          // 0–1, smoothed win rate vs this specific enemy lineup
+  overall_win_rate: number;  // 0–1, win rate for this item on this hero regardless of enemies
   confidence: Confidence;
   debug?: ItemDebugEntry[]; // per-enemy game counts, omitted in non-debug builds
 }
@@ -51,7 +52,9 @@ export interface TimingBucket {
     item_id: number;
     item_name: string;
     display_name: string;
-    win_rate: number; // popularity-rank proxy around hero overall win rate
+    win_rate: number;         // real overall win rate from explorer (or rank proxy fallback)
+    overall_games: number;    // total games this hero bought this item (for debug)
+    debug?: ItemDebugEntry[]; // per-enemy breakdown, same as phase items
   }[];
 }
 

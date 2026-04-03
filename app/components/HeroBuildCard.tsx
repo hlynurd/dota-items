@@ -119,8 +119,16 @@ export default function HeroBuildCard({ build }: { build: HeroBuild }) {
         )}
         {/* Debug: item × enemy game counts (collapsed by default) */}
         {(() => {
-          const allItems = PHASES.flatMap(({ key }) => phases[key] ?? [])
+          const phaseItems = PHASES.flatMap(({ key }) => phases[key] ?? [])
             .filter((item) => item.debug && item.debug.length > 0);
+          // Deduplicate timing items vs phase items by item_id
+          const phaseItemIds = new Set(phaseItems.map((i) => i.item_id));
+          const timingItems = timing_winrates
+            .flatMap((b) => b.top_items)
+            .filter((item) => item.debug && item.debug.length > 0 && !phaseItemIds.has(item.item_id))
+            .filter((item, idx, arr) => arr.findIndex((x) => x.item_id === item.item_id) === idx);
+
+          const allItems = [...phaseItems, ...timingItems];
           if (!allItems.length) return null;
           const enemies = allItems[0].debug!;
 
@@ -142,7 +150,37 @@ export default function HeroBuildCard({ build }: { build: HeroBuild }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {allItems.map((item) => (
+                    {phaseItems.length > 0 && (
+                      <tr>
+                        <td colSpan={enemies.length + 1} className="pt-1 pb-0.5 text-zinc-700 font-mono text-xs">
+                          — phase items —
+                        </td>
+                      </tr>
+                    )}
+                    {phaseItems.map((item) => (
+                      <tr key={item.item_id} className="border-t border-zinc-800/40">
+                        <td className="py-0.5 pr-4 text-zinc-500 truncate max-w-[100px]">
+                          {item.display_name}
+                        </td>
+                        {item.debug!.map((e) => (
+                          <td
+                            key={e.hero_id}
+                            className="py-0.5 pr-3 font-mono text-zinc-600 whitespace-nowrap"
+                            title={`${e.wins}W / ${e.games}G — smoothed ${(e.smoothed_wr * 100).toFixed(1)}%`}
+                          >
+                            {e.games}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                    {timingItems.length > 0 && (
+                      <tr>
+                        <td colSpan={enemies.length + 1} className="pt-2 pb-0.5 text-zinc-700 font-mono text-xs">
+                          — timing items —
+                        </td>
+                      </tr>
+                    )}
+                    {timingItems.map((item) => (
                       <tr key={item.item_id} className="border-t border-zinc-800/40">
                         <td className="py-0.5 pr-4 text-zinc-500 truncate max-w-[100px]">
                           {item.display_name}

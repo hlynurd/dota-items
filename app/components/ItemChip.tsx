@@ -7,7 +7,11 @@ interface Props {
 }
 
 export default function ItemChip({ item, size = "md" }: Props) {
-  const baseWinPct = (item.win_rate * 100).toFixed(1);
+  const winPct = (item.win_rate * 100).toFixed(1);
+  const diff = item.win_rate - item.overall_win_rate;
+  const diffPct = (Math.abs(diff) * 100).toFixed(1);
+  const diffSign = diff >= 0 ? "+" : "−";
+  const diffColor = diff >= 0.005 ? "text-green-400" : diff <= -0.005 ? "text-red-400" : "text-zinc-600";
 
   const confidenceDot: Record<typeof item.confidence, string> = {
     high: "bg-green-500",
@@ -37,8 +41,11 @@ export default function ItemChip({ item, size = "md" }: Props) {
           </span>
           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${confidenceDot[item.confidence]}`} />
         </div>
-        <div className="mt-0.5">
-          <span className="text-xs text-zinc-400">{baseWinPct}% win rate</span>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-xs text-zinc-400">{winPct}%</span>
+          <span className={`text-xs font-mono ${diffColor}`}>
+            {diffSign}{diffPct}% vs baseline
+          </span>
         </div>
       </div>
     </div>

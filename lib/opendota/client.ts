@@ -65,9 +65,40 @@ export async function getMatchupWinRatesVsEnemies(
   return all.filter((m) => enemyHeroIds.includes(m.hero_id));
 }
 
+type ExplorerRow = { item_id: string | number; games: string | number; wins: string | number };
+
+async function fetchExplorer(sql: string): Promise<ExplorerItemRow[]> {
+  const res = await fetch(
+    `${BASE_URL}/explorer?sql=${encodeURIComponent(sql)}`,
+    { next: { revalidate: 86400 } } // 24h cache
+  );
+  if (!res.ok) throw new Error(`OpenDota explorer error: ${res.status}`);
+  const data = await res.json() as { rows: ExplorerRow[]; err: string | null };
+  if (data.err) throw new Error(`OpenDota explorer query error: ${data.err}`);
+  return data.rows.map(r => ({
+    item_id: Number(r.item_id),
+    games: Number(r.games),
+    wins: Number(r.wins),
+  }));
+}
+
+// Overall item win rates for heroId across ALL games (no enemy filter).
+// Used as the baseline for the matchup diff. Fast — no self-join.
+export async function getHeroItemWinRates(heroId: number): Promise<ExplorerItemRow[]> {
+  const sql = [
+    "SELECT item_id, COUNT(*) as games, SUM(win) as wins FROM (",
+    "SELECT unnest(ARRAY[p.item_0,p.item_1,p.item_2,p.item_3,p.item_4,p.item_5]) as item_id,",
+    "CASE WHEN (p.player_slot < 128) = m.radiant_win THEN 1 ELSE 0 END as win",
+    "FROM player_matches p",
+    "JOIN matches m ON p.match_id = m.match_id",
+    `WHERE p.hero_id = ${heroId}`,
+    ") sub WHERE item_id != 0 GROUP BY item_id ORDER BY games DESC LIMIT 300",
+  ].join(" ");
+  return fetchExplorer(sql);
+}
+
 // Per-item win rate for heroId in games where enemyHeroId was on the opposing team.
-// Uses OpenDota's /explorer SQL endpoint. Cached aggressively (24h) since this
-// data changes slowly and the query is expensive (full-table self-join).
+// Expensive (full-table self-join) — cached 24h.
 export async function getItemWinRatesVsEnemy(
   heroId: number,
   enemyHeroId: number
@@ -81,22 +112,9 @@ export async function getItemWinRatesVsEnemy(
     `JOIN player_matches opp ON p.match_id = opp.match_id AND opp.hero_id = ${enemyHeroId}`,
     "AND (p.player_slot < 128) != (opp.player_slot < 128)",
     `WHERE p.hero_id = ${heroId}`,
-    ") sub WHERE item_id != 0 GROUP BY item_id ORDER BY games DESC LIMIT 100",
+    ") sub WHERE item_id != 0 GROUP BY item_id ORDER BY games DESC LIMIT 200",
   ].join(" ");
-
-  const res = await fetch(
-    `${BASE_URL}/explorer?sql=${encodeURIComponent(sql)}`,
-    { next: { revalidate: 86400 } } // 24h cache
-  );
-  if (!res.ok) throw new Error(`OpenDota explorer error: ${res.status}`);
-  const data = await res.json() as { rows: { item_id: string | number; games: string | number; wins: string | number }[]; err: string | null };
-  if (data.err) throw new Error(`OpenDota explorer query error: ${data.err}`);
-  // Coerce string fields (PostgreSQL bigint comes back as string in some environments)
-  return data.rows.map(r => ({
-    item_id: Number(r.item_id),
-    games: Number(r.games),
-    wins: Number(r.wins),
-  }));
+  return fetchExplorer(sql);
 }
 
 // Top N items from a phase bucket by popularity count

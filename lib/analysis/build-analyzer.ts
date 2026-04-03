@@ -1,5 +1,6 @@
 import {
   getHeroItemPopularity,
+  getHeroItemWinRates,
   getHeroMatchups,
   getItemWinRatesVsEnemy,
   getItemsMap,
@@ -31,21 +32,15 @@ function resolveItem(
 
 // ─── Smoothing ────────────────────────────────────────────────────────────────
 
-// Pseudo-count for Bayesian smoothing toward the pairwise win rate.
-// With K=50: an item with 0 games vs enemy E gets exactly the pairwise win rate;
-// with 50 real games it's a 50/50 blend; with 200+ games real data dominates.
+// K=50: with 0 real games vs enemy → pure pairwise fallback.
+// With 50 games → 50/50 blend. With 200+ → real data dominates.
 const SMOOTHING_K = 50;
 
 /**
- * Compute a matchup-adjusted win rate for `itemId` when `hero` plays vs `enemies`.
- *
- * Method: independence decomposition (Naive Bayes assumption).
+ * Compute smoothed lineup win rate for an item and return per-enemy debug entries.
  * For each enemy ei:
- *   smoothed_wr(item, ei) = (wins_vs_ei + K × pairwise_wr(hero, ei)) / (games_vs_ei + K)
- * lineup_score = mean over all enemies of smoothed_wr
- *
- * When games_vs_ei = 0 the score falls back to pairwise_wr(hero, ei).
- * When pairwise data is also absent it falls back to 0.5.
+ *   smoothed_wr = (wins_vs_ei + K × pairwise_wr(hero, ei)) / (games_vs_ei + K)
+ * lineup_score = mean of smoothed_wr across all enemies
  */
 function computeLineupScore(
   itemId: number,
@@ -83,8 +78,9 @@ function computeLineupScore(
 // ─── Phase builder ────────────────────────────────────────────────────────────
 
 /**
- * Take the top 20 most-popular items in a phase bucket, re-rank them by
- * matchup-adjusted win rate, return the top n.
+ * Score ALL items in the phase popularity bucket by matchup-adjusted win rate,
+ * return the top n sorted by win_rate descending.
+ * overall_win_rate is looked up from the unconditional explorer data.
  */
 function buildPhaseItems(
   bucket: Record<string, number>,
@@ -92,26 +88,25 @@ function buildPhaseItems(
   enemies: Hero[],
   explorerData: Map<number, Map<number, ExplorerItemRow>>,
   pairwiseWinRates: Map<number, number>,
+  overallWinRates: Map<number, ExplorerItemRow>,
   itemsMap: OpenDotaItemsMap
 ): ItemRecommendation[] {
-  const candidates = topItemsFromBucket(bucket, 20);
+  // Use ALL items in the bucket, not just top-N — broader coverage
+  const candidates = topItemsFromBucket(bucket, Infinity);
 
   return candidates
     .map(({ item_id }) => {
       const { win_rate, confidence, debug } = computeLineupScore(
         item_id, enemies, explorerData, pairwiseWinRates
       );
-      return { item_id, ...resolveItem(itemsMap, item_id), win_rate, confidence, debug };
+      const overall = overallWinRates.get(item_id);
+      const overall_win_rate = overall && overall.games > 0
+        ? Math.round((overall.wins / overall.games) * 1000) / 1000
+        : win_rate; // fallback: treat overall same as lineup (diff = 0)
+      return { item_id, ...resolveItem(itemsMap, item_id), win_rate, overall_win_rate, confidence, debug };
     })
     .sort((a, b) => b.win_rate - a.win_rate)
     .slice(0, n);
-}
-
-// ─── Timing buckets (popularity-based, not matchup-adjusted) ─────────────────
-
-function rankToWinRate(rank: number, total: number, overallWinRate: number): number {
-  const t = total > 1 ? rank / (total - 1) : 0.5;
-  return Math.round((overallWinRate + 0.03 * (1 - 2 * t)) * 1000) / 1000;
 }
 
 // ─── Per-hero analysis ────────────────────────────────────────────────────────
@@ -121,10 +116,11 @@ async function analyzeHero(
   enemies: Hero[],
   itemsMap: OpenDotaItemsMap
 ): Promise<HeroBuild> {
-  // Fetch base data and per-enemy explorer data in parallel
-  const [popularity, allMatchups, explorerByEnemyArr] = await Promise.all([
+  // Fetch all data in parallel
+  const [popularity, allMatchups, overallRows, explorerByEnemyArr] = await Promise.all([
     getHeroItemPopularity(hero.id),
     getHeroMatchups(hero.id),
+    getHeroItemWinRates(hero.id),
     Promise.all(
       enemies.map((enemy) =>
         getItemWinRatesVsEnemy(hero.id, enemy.id).then((rows) => ({ enemyId: enemy.id, rows }))
@@ -132,7 +128,11 @@ async function analyzeHero(
     ),
   ]);
 
-  // Build item lookup: enemyId → itemId → ExplorerItemRow
+  // Overall (unconditional) win rate map: itemId → ExplorerItemRow
+  const overallWinRates = new Map<number, ExplorerItemRow>();
+  for (const row of overallRows) overallWinRates.set(row.item_id, row);
+
+  // Per-enemy item lookup: enemyId → itemId → ExplorerItemRow
   const explorerData = new Map<number, Map<number, ExplorerItemRow>>();
   for (const { enemyId, rows } of explorerByEnemyArr) {
     const itemMap = new Map<number, ExplorerItemRow>();
@@ -140,12 +140,12 @@ async function analyzeHero(
     explorerData.set(enemyId, itemMap);
   }
 
-  // Overall win rate from matchup data
+  // Hero overall win rate from matchup aggregates
   const totalGames = allMatchups.reduce((s, m) => s + m.games_played, 0);
   const totalWins = allMatchups.reduce((s, m) => s + m.wins, 0);
   const overallWinRate = totalGames > 0 ? totalWins / totalGames : 0.5;
 
-  // Pairwise win rate vs each enemy (used as smoothing prior)
+  // Pairwise win rate per enemy (Bayesian prior for smoothing)
   const pairwiseWinRates = new Map<number, number>();
   for (const enemy of enemies) {
     const matchup = allMatchups.find((m) => m.hero_id === enemy.id);
@@ -158,15 +158,15 @@ async function analyzeHero(
   const avgVsEnemies = enemyWrs.length > 0 ? enemyWrs.reduce((s, w) => s + w, 0) / enemyWrs.length : overallWinRate;
   const matchupDelta = Math.round((avgVsEnemies - overallWinRate) * 1000) / 1000;
 
-  // Phase items: popularity-seeded, matchup-reranked
+  // Phase items: all candidates in popularity bucket, re-ranked by lineup win rate
   const phases: HeroBuild["phases"] = {
-    starting:    buildPhaseItems(popularity.start_game_items,  6, enemies, explorerData, pairwiseWinRates, itemsMap),
-    early:       buildPhaseItems(popularity.early_game_items,  6, enemies, explorerData, pairwiseWinRates, itemsMap),
-    core:        buildPhaseItems(popularity.mid_game_items,    6, enemies, explorerData, pairwiseWinRates, itemsMap),
-    situational: buildPhaseItems(popularity.late_game_items,   6, enemies, explorerData, pairwiseWinRates, itemsMap),
+    starting:    buildPhaseItems(popularity.start_game_items,  6, enemies, explorerData, pairwiseWinRates, overallWinRates, itemsMap),
+    early:       buildPhaseItems(popularity.early_game_items,  6, enemies, explorerData, pairwiseWinRates, overallWinRates, itemsMap),
+    core:        buildPhaseItems(popularity.mid_game_items,    6, enemies, explorerData, pairwiseWinRates, overallWinRates, itemsMap),
+    situational: buildPhaseItems(popularity.late_game_items,   6, enemies, explorerData, pairwiseWinRates, overallWinRates, itemsMap),
   };
 
-  // Timing buckets: popularity-only (phase-assignment aid, not matchup-specific)
+  // Timing buckets: real overall win rates + per-enemy debug
   const TIMING: { before_minute: TimingBucket["before_minute"]; bucket: Record<string, number> }[] = [
     { before_minute: 5,  bucket: popularity.start_game_items },
     { before_minute: 10, bucket: popularity.early_game_items },
@@ -178,11 +178,15 @@ async function analyzeHero(
 
   const timing_winrates: TimingBucket[] = TIMING.map(({ before_minute, bucket }) => ({
     before_minute,
-    top_items: topItemsFromBucket(bucket, 3).map(({ item_id }, rank) => ({
-      item_id,
-      ...resolveItem(itemsMap, item_id),
-      win_rate: rankToWinRate(rank, 3, overallWinRate),
-    })),
+    top_items: topItemsFromBucket(bucket, 3).map(({ item_id }) => {
+      const overall = overallWinRates.get(item_id);
+      const win_rate = overall && overall.games > 0
+        ? Math.round((overall.wins / overall.games) * 1000) / 1000
+        : overallWinRate;
+      const overall_games = overall?.games ?? 0;
+      const { debug } = computeLineupScore(item_id, enemies, explorerData, pairwiseWinRates);
+      return { item_id, ...resolveItem(itemsMap, item_id), win_rate, overall_games, debug };
+    }),
   }));
 
   return { hero, matchup_delta: matchupDelta, phases, timing_winrates };
