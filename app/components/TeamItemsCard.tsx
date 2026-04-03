@@ -27,7 +27,7 @@ function ItemRow({ item, showLift }: { item: TeamItemEntry; showLift: boolean })
         <span className="text-sm font-mono text-zinc-400 shrink-0">{pct}%</span>
       )}
       <span className="text-xs text-zinc-600 font-mono shrink-0 w-12 text-right">
-        {item.games}g
+        ({item.games})
       </span>
     </div>
   );

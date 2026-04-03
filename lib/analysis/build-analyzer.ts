@@ -301,8 +301,8 @@ function analyzeTeamItemsFromData(
     });
   }
 
-  const byWinrate = [...entries].sort((a, b) => b.lineup_wr - a.lineup_wr).slice(0, 15);
-  const byLift = [...entries].sort((a, b) => b.lift - a.lift).slice(0, 15);
+  const byWinrate = [...entries].sort((a, b) => b.lineup_wr - a.lineup_wr).slice(0, 30);
+  const byLift = [...entries].sort((a, b) => b.lift - a.lift).slice(0, 30);
 
   return { top_by_winrate: byWinrate, top_by_lift: byLift };
 }
