@@ -8,9 +8,12 @@ import type {
 } from "./types";
 
 const BASE_URL = "https://api.opendota.com/api";
+const API_KEY = process.env.OPENDOTA_API_KEY ?? "";
 
 async function fetchOpenDota<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const sep = path.includes("?") ? "&" : "?";
+  const url = API_KEY ? `${BASE_URL}${path}${sep}api_key=${API_KEY}` : `${BASE_URL}${path}`;
+  const res = await fetch(url, {
     next: { revalidate: 3600 }, // cache for 1 hour (Next.js fetch cache)
   });
   if (!res.ok) {
