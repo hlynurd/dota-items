@@ -5,7 +5,7 @@
 
 import { db } from "./client";
 import { item_marginal_win_rates, item_baseline_win_rates } from "./schema";
-import { inArray } from "drizzle-orm";
+import { inArray, sql } from "drizzle-orm";
 
 // ─── Marginal queries ────────────────────────────────────────────────────────
 
@@ -58,4 +58,12 @@ export async function getItemBaselines(): Promise<ItemBaselineRow[]> {
       wins: item_baseline_win_rates.wins,
     })
     .from(item_baseline_win_rates);
+}
+
+/**
+ * Total match count in the DB. Used for purchase rate normalization.
+ */
+export async function getTotalMatches(): Promise<number> {
+  const res = await db.execute(sql`SELECT COUNT(*)::text AS c FROM matches`);
+  return parseInt((res.rows[0] as { c: string }).c, 10);
 }

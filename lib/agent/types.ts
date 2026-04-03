@@ -104,6 +104,7 @@ export interface TeamItemEntry {
   baseline_wr: number;      // unconditional win rate
   lineup_wr: number;        // marginal score vs this lineup
   lift: number;             // lineup_wr - baseline_wr
+  purchase_lift: number;    // how much likelier this item is bought vs this lineup (1.0 = same, 2.0 = 2x)
   games: number;            // avg games per enemy context
   enemy_breakdown: MarginalDebugEntry[];
 }
@@ -111,6 +112,7 @@ export interface TeamItemEntry {
 export interface TeamItemsResult {
   top_by_winrate: TeamItemEntry[];
   top_by_lift: TeamItemEntry[];
+  top_by_purchase: TeamItemEntry[];
 }
 
 export interface AgentResponse {
