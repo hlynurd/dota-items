@@ -11,7 +11,7 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   try {
-    const result = await runIngest({ maxMatches: 200, minRankTier: 65, maxPages: 20, pruneWindowDays: 7 });
+    const result = await runIngest({ maxMatches: 200, minRankTier: 0, maxPages: 20, pruneWindowDays: null });
     return Response.json({ ok: true, ...result });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
