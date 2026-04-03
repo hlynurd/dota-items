@@ -4,7 +4,7 @@ import {
   getItemsMap,
   topItemsFromBucket,
 } from "../opendota/client";
-import { getItemMarginals, getItemBaselines, getTotalMatches } from "../db/queries";
+import { getItemMarginals, getItemBaselines } from "../db/queries";
 import type { ItemMarginalRow, ItemBaselineRow } from "../db/queries";
 import type { OpenDotaItemsMap } from "../opendota/types";
 import type {
@@ -266,34 +266,13 @@ function analyzeTeamItemsFromData(
   itemsMap: OpenDotaItemsMap,
   marginalRows: ItemMarginalRow[],
   baselineRows: ItemBaselineRow[],
-  totalMatches: number,
 ): TeamItemsResult {
   const enemyIdx = buildMarginalIndex(marginalRows, "enemy", 999);
   const basIdx = buildBaselineIndex(baselineRows, 999);
   const componentSet = buildComponentSet(itemsMap);
 
-  // Count matches per enemy hero (from any item's marginal data — pick the most common item)
-  // A hero appears in ~total_matches/num_heroes matches on average, but we get it precisely
-  // by finding the max marginal games for any item vs that enemy (approximation).
-  // Better: sum of games for a very common item gives matches_with_enemy * purchase_rate.
-  // Simplest: total_matches * (10/num_heroes) ≈ matches per enemy. But let's compute it.
-  const matchesPerEnemy = new Map<number, number>();
-  for (const enemy of enemies) {
-    // Use the item with most games vs this enemy as a rough upper bound proxy.
-    // More accurately: matches_with_enemy ≈ total_matches * enemy_pick_rate.
-    // Pick rate ≈ 10/num_heroes (10 heroes per game, ~130 heroes).
-    // For now use total_matches * 10/130 as expected matches with any given enemy.
-    matchesPerEnemy.set(enemy.id, totalMatches * 10 / 130);
-  }
-
-  // Baseline purchase rate: item_baseline_games / total_item_purchase_events
-  // Since each match has ~10 heroes × ~10 items = ~100 item events,
-  // baseline_rate = baseline_games / (total_matches * 100) approximately.
-  // But for the RATIO (purchase_lift) we just need marginal_rate / baseline_rate.
-  // marginal_rate = marginal_games / matches_with_enemy
-  // baseline_rate = baseline_games / total_matches
-  // purchase_lift = (marginal_games / matches_with_enemy) / (baseline_games / total_matches)
-  //               = (marginal_games * total_matches) / (baseline_games * matches_with_enemy)
+  // Number of unique heroes in the pool (used for expected purchase rate)
+  const NUM_HEROES = 130;
 
   const entries: TeamItemEntry[] = [];
   for (const [key, baseline] of basIdx.entries()) {
@@ -311,16 +290,16 @@ function analyzeTeamItemsFromData(
       item_id, enemies, enemyIdx, basIdx, "enemy"
     );
 
-    // Purchase lift: how much likelier this item is bought against this lineup
+    // Purchase lift: how much likelier this item is bought vs this lineup.
+    // Each purchase event has 5 enemies, so a random hero is enemy in 5/NUM_HEROES of events.
+    // expected_marginal = baseline_games * 5 / NUM_HEROES
+    // purchase_lift = actual_marginal / expected_marginal
     let purchaseLiftSum = 0;
     for (const enemy of enemies) {
       const marginal = enemyIdx.get(`${item_id}:${enemy.id}`);
       const marginalGames = marginal?.games ?? 0;
-      const expectedMatches = matchesPerEnemy.get(enemy.id) ?? 1;
-      // ratio = (marginal_games / expected_matches) / (baseline_games / total_matches)
-      const ratio = totalMatches > 0 && baseline.games > 0
-        ? (marginalGames / expectedMatches) / (baseline.games / totalMatches)
-        : 1;
+      const expected = baseline.games * 5 / NUM_HEROES;
+      const ratio = expected > 0 ? marginalGames / expected : 1;
       purchaseLiftSum += ratio;
     }
     const purchaseLift = enemies.length > 0
@@ -355,11 +334,10 @@ export async function analyzeDraft(
   const allHeroIds = allHeroes.map((h) => h.id);
 
   // Fetch shared data ONCE for the entire draft
-  const [itemsMap, marginalRows, baselineRows, totalMatches] = await Promise.all([
+  const [itemsMap, marginalRows, baselineRows] = await Promise.all([
     getItemsMap(),
     getItemMarginals(allHeroIds),
     getItemBaselines(),
-    getTotalMatches(),
   ]);
 
   const builds = await Promise.all(
@@ -373,7 +351,7 @@ export async function analyzeDraft(
 
   // Team-level item analysis (use radiant's perspective — enemies = dire)
   const teamItems = draft.dire.length > 0
-    ? analyzeTeamItemsFromData(draft.dire, itemsMap, marginalRows, baselineRows, totalMatches)
+    ? analyzeTeamItemsFromData(draft.dire, itemsMap, marginalRows, baselineRows)
     : null;
 
   return { builds, teamItems };
