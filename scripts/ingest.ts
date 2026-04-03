@@ -1,19 +1,23 @@
 /**
- * Ingest script — fetches recent high-rank ranked matches from OpenDota and
- * stores raw match + item timing data in Postgres.
+ * Ingest script — fetches recent ranked matches from OpenDota and stores raw
+ * match + item timing data in Postgres.
  *
- * Run via: npm run ingest
+ * Run via: npm run ingest          (cron mode: Ancient 5+, 7-day window)
+ *          npm run backfill        (bulk mode: all ranks, no pruning, 10 000 matches)
  * Or triggered by Vercel Cron via GET /api/cron/ingest
  *
  * Strategy:
  *  1. Fetch pages of /parsedMatches (recently parsed, purchase_log available)
- *  2. Filter to game_mode=22 (ranked) and avg_rank_tier >= 70 (Ancient+)
- *     Note: Divine+ (rank 80) is not accessible via the free public API —
- *     high-rank players have private profiles. Ancient+ is the highest rank
- *     tier reliably available and represents top ~2% of players.
+ *  2. Filter to game_mode=22 (ranked) and avg_rank_tier >= minRankTier
  *  3. Skip match_ids already in DB
  *  4. Fetch full match detail, parse purchase_log, insert rows
- *  5. Prune matches older than 7 days
+ *  5. Prune matches older than pruneWindowDays (if set)
+ *  6. Evict oldest low-rank matches when total exceeds evictAt threshold
+ *
+ * Rank tier reference (OpenDota):
+ *   Herald 11-15 | Guardian 21-25 | Crusader 31-35 | Archon 41-45 |
+ *   Legend 51-55 | Ancient 61-65 | Divine 71-75 | Immortal 80
+ *   Ancient 5 = 65
  */
 
 import { config } from "dotenv";
@@ -21,16 +25,41 @@ config({ path: ".env.local" });
 
 import { db } from "../lib/db/client";
 import { matches, item_timings } from "../lib/db/schema";
-import { inArray, lt } from "drizzle-orm";
+import { inArray, lt, sql } from "drizzle-orm";
 
 const OPENDOTA = "https://api.opendota.com/api";
 const GAME_MODE_RANKED = 22;
-const MIN_RANK_TIER = 70;    // Ancient+ (Divine+ not available via free API)
-const WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-const BATCH_SIZE = 5;        // parallel match detail fetches
-const RATE_DELAY_MS = 1200;  // ~50 req/min, safely under OpenDota's 60/min limit
+const API_KEY = process.env.OPENDOTA_API_KEY ?? "";
+const HAS_KEY = API_KEY.length > 0;
+const RATE_DELAY_MS = HAS_KEY ? 200 : 1200; // 200ms with key (3000/min), 1200ms without (60/min)
+const BATCH_SIZE = HAS_KEY ? 15 : 5;         // more parallelism with key
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface IngestOptions {
+  /** Maximum qualifying matches to insert in this run. Default: 200 */
+  maxMatches?: number;
+  /** Minimum avg_rank_tier to accept. 0 = all ranks. Default: 65 (Ancient 5) */
+  minRankTier?: number;
+  /** How many /parsedMatches pages to scan for candidates. Default: 20 */
+  maxPages?: number;
+  /**
+   * Delete matches older than this many days. null = no time-based pruning.
+   * Default: 7
+   */
+  pruneWindowDays?: number | null;
+  /**
+   * Once the total match count reaches this number, start evicting the oldest
+   * matches whose avg_rank_tier < evictBelowRank to make room for better data.
+   * Default: 15000
+   */
+  evictAt?: number;
+  /**
+   * Rank tier threshold for eviction. Matches below this are evicted first
+   * when the total exceeds evictAt. Default: 65 (Ancient 5)
+   */
+  evictBelowRank?: number;
+}
 
 interface ParsedMatch { match_id: number }
 
@@ -56,19 +85,43 @@ async function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`OpenDota ${res.status}: ${url}`);
-  return res.json() as Promise<T>;
+function withKey(url: string): string {
+  if (!API_KEY) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}api_key=${API_KEY}`;
+}
+
+async function fetchJson<T>(url: string, retries = 3): Promise<T> {
+  const fullUrl = withKey(url);
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const res = await fetch(fullUrl);
+    if (res.status === 429 && attempt < retries) {
+      const wait = (HAS_KEY ? 10_000 : 60_000) * (attempt + 1);
+      console.warn(`[ingest] Rate limited (429), waiting ${wait / 1000}s before retry...`);
+      await sleep(wait);
+      continue;
+    }
+    if (!res.ok) throw new Error(`OpenDota ${res.status}: ${url}`);
+    return res.json() as Promise<T>;
+  }
+  throw new Error(`OpenDota 429 after ${retries} retries: ${url}`);
 }
 
 async function fetchComponentSet(): Promise<Set<string>> {
   const itemsMap = await fetchJson<Record<string, { components: string[] | null }>>(
     `${OPENDOTA}/constants/items`
   );
+  // Collect every item name that appears as a component of another item
   const components = new Set<string>();
   for (const item of Object.values(itemsMap)) {
     for (const c of item.components ?? []) components.add(c);
+  }
+  // Keep items that have components themselves — they're real standalone items
+  // that happen to be upgradeable (Eul's → Wind Waker, Shadow Blade → Silver Edge, etc.)
+  for (const [name, item] of Object.entries(itemsMap)) {
+    if (item.components && item.components.length > 0) {
+      components.delete(name);
+    }
   }
   return components;
 }
@@ -84,8 +137,22 @@ async function fetchItemIdMap(): Promise<Map<string, number>> {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-export async function runIngest(maxMatches = 200): Promise<{ inserted: number; skipped: number }> {
-  const cutoff = new Date(Date.now() - WINDOW_MS);
+export async function runIngest(options: IngestOptions = {}): Promise<{ inserted: number; skipped: number }> {
+  const {
+    maxMatches = 200,
+    minRankTier = 65,
+    maxPages = 20,
+    pruneWindowDays = 7,
+    evictAt = 15000,
+    evictBelowRank = 65,
+  } = options;
+
+  // Higher multiplier when rank filter is strict (low Ancient+ hit rate in feed)
+  const candidateMultiplier = minRankTier >= 65 ? 10 : 3;
+  const cutoff = pruneWindowDays != null
+    ? new Date(Date.now() - pruneWindowDays * 24 * 60 * 60 * 1000)
+    : null;
+
   let inserted = 0;
   let skipped = 0;
 
@@ -93,14 +160,14 @@ export async function runIngest(maxMatches = 200): Promise<{ inserted: number; s
   const [componentSet, itemIdMap] = await Promise.all([fetchComponentSet(), fetchItemIdMap()]);
   console.log(`[ingest] ${itemIdMap.size} items, ${componentSet.size} components to exclude`);
 
-  // 1. Collect candidate match IDs from parsedMatches (paginate to get enough)
-  console.log("[ingest] Fetching parsed match IDs...");
+  // 1. Collect candidate match IDs by paginating /parsedMatches
+  console.log(`[ingest] Scanning up to ${maxPages} pages for candidates (minRankTier=${minRankTier})...`);
   const candidateIds: number[] = [];
   let lastMatchId: number | undefined;
   let pages = 0;
-  const maxPages = 10; // up to 1000 match IDs
+  const targetCandidates = maxMatches * candidateMultiplier;
 
-  while (candidateIds.length < maxMatches * 3 && pages < maxPages) {
+  while (candidateIds.length < targetCandidates && pages < maxPages) {
     const url = `${OPENDOTA}/parsedMatches${lastMatchId ? `?less_than_match_id=${lastMatchId}` : ""}`;
     const page = await fetchJson<ParsedMatch[]>(url);
     if (!page.length) break;
@@ -111,17 +178,21 @@ export async function runIngest(maxMatches = 200): Promise<{ inserted: number; s
   }
   console.log(`[ingest] ${candidateIds.length} candidate IDs from ${pages} pages`);
 
-  // 2. Filter out already-ingested
-  const existing = await db
-    .select({ match_id: matches.match_id })
-    .from(matches)
-    .where(inArray(matches.match_id, candidateIds.slice(0, 1000)));
-  const existingIds = new Set(existing.map((r) => r.match_id));
-  const toFetch = candidateIds.filter((id) => !existingIds.has(id)).slice(0, maxMatches * 3);
+  // 2. Filter out already-ingested match IDs (batched — inArray has a 1000-element limit)
+  const existingIds = new Set<number>();
+  for (let i = 0; i < candidateIds.length; i += 1000) {
+    const chunk = candidateIds.slice(i, i + 1000);
+    const rows = await db
+      .select({ match_id: matches.match_id })
+      .from(matches)
+      .where(inArray(matches.match_id, chunk));
+    for (const r of rows) existingIds.add(r.match_id);
+  }
+  const toFetch = candidateIds.filter((id) => !existingIds.has(id)).slice(0, targetCandidates);
   skipped += existingIds.size;
   console.log(`[ingest] ${toFetch.length} to fetch (${skipped} already in DB)`);
 
-  // 3. Fetch match details, filter by rank and game mode, insert
+  // 3. Fetch match details, filter, insert
   let fetched = 0;
   for (let i = 0; i < toFetch.length && inserted < maxMatches; i += BATCH_SIZE) {
     const batch = toFetch.slice(i, i + BATCH_SIZE);
@@ -134,26 +205,21 @@ export async function runIngest(maxMatches = 200): Promise<{ inserted: number; s
       const match = result.value;
       fetched++;
 
-      // Filter: ranked mode only
       if (match.game_mode !== GAME_MODE_RANKED) { skipped++; continue; }
+      if (cutoff && match.start_time * 1000 < cutoff.getTime()) { skipped++; continue; }
 
-      // Filter: must be within rolling window
-      if (match.start_time * 1000 < cutoff.getTime()) { skipped++; continue; }
-
-      // Filter: Ancient+ by actual player rank_tier
       const rankTiers = match.players
         .map((p) => p.rank_tier)
         .filter((r): r is number => r != null && r >= 10);
       const avg_rank_tier = rankTiers.length > 0
         ? Math.round(rankTiers.reduce((s, r) => s + r, 0) / rankTiers.length)
         : 0;
-      if (avg_rank_tier < MIN_RANK_TIER) { skipped++; continue; }
+      if (avg_rank_tier < minRankTier) { skipped++; continue; }
 
       const radiant = match.players.filter((p) => p.player_slot < 128).map((p) => p.hero_id);
       const dire    = match.players.filter((p) => p.player_slot >= 128).map((p) => p.hero_id);
       if (radiant.length !== 5 || dire.length !== 5) { skipped++; continue; }
 
-      // Parse item timings — completed items only
       const timingRows: typeof item_timings.$inferInsert[] = [];
       for (const player of match.players) {
         if (!player.hero_id || !player.purchase_log?.length) continue;
@@ -180,24 +246,90 @@ export async function runIngest(maxMatches = 200): Promise<{ inserted: number; s
         }).onConflictDoNothing();
         await db.insert(item_timings).values(timingRows).onConflictDoNothing();
         inserted++;
-        if (inserted % 10 === 0) console.log(`[ingest] ${inserted} inserted, ${fetched} fetched so far...`);
+        if (inserted % 25 === 0) console.log(`[ingest] ${inserted} inserted, ${fetched} fetched...`);
       } catch (err) {
         console.warn(`[ingest] DB insert failed for match ${match.match_id}:`, err);
         skipped++;
       }
     }
 
-    if (i + BATCH_SIZE < toFetch.length) await sleep(RATE_DELAY_MS);
+    if (i + BATCH_SIZE < toFetch.length && inserted < maxMatches) await sleep(RATE_DELAY_MS);
   }
 
-  // 4. Prune old matches
-  await db.delete(matches).where(lt(matches.start_time, cutoff));
+  // 4. Time-based pruning — cascade delete item_timings first, then matches
+  if (cutoff) {
+    await db.execute(sql`
+      DELETE FROM item_timings
+      WHERE match_id IN (
+        SELECT match_id FROM matches WHERE start_time < ${cutoff}
+      )
+    `);
+    await db.delete(matches).where(lt(matches.start_time, cutoff));
+    console.log(`[ingest] Pruned matches older than ${pruneWindowDays} days`);
+  }
+
+  // 5. Eviction — when total >= evictAt, remove matches to stay at evictAt.
+  //    Order: low-rank matches first (avg_rank_tier < evictBelowRank), then oldest
+  //    regardless of rank. This lets backfill data get replaced by quality data over time.
+  const countResult = await db.execute<{ total: string }>(
+    sql`SELECT COUNT(*)::text AS total FROM matches`
+  );
+  const total = parseInt(countResult.rows[0]?.total ?? "0", 10);
+  if (total >= evictAt) {
+    const toEvict = total - evictAt + Math.min(inserted, 500);
+    console.log(`[ingest] ${total} matches >= ${evictAt}; evicting ${toEvict} (low-rank first, then oldest)`);
+    await db.execute(sql`
+      DELETE FROM item_timings
+      WHERE match_id IN (
+        SELECT match_id FROM matches
+        ORDER BY
+          CASE WHEN avg_rank_tier < ${evictBelowRank} THEN 0 ELSE 1 END ASC,
+          start_time ASC
+        LIMIT ${toEvict}
+      )
+    `);
+    await db.execute(sql`
+      DELETE FROM matches
+      WHERE match_id IN (
+        SELECT match_id FROM matches
+        ORDER BY
+          CASE WHEN avg_rank_tier < ${evictBelowRank} THEN 0 ELSE 1 END ASC,
+          start_time ASC
+        LIMIT ${toEvict}
+      )
+    `);
+  }
+
   console.log(`[ingest] Done. Inserted: ${inserted}, skipped: ${skipped}, fetched: ${fetched}`);
   return { inserted, skipped };
 }
 
+// ─── CLI entry point ──────────────────────────────────────────────────────────
+
 if (process.argv[1]?.endsWith("ingest.ts")) {
-  runIngest(200)
+  const isBackfill = process.argv.includes("--backfill");
+
+  const cliOptions: IngestOptions = isBackfill
+    ? {
+        maxMatches: 10000,
+        minRankTier: 0,        // accept all ranks for initial population
+        maxPages: 100,
+        pruneWindowDays: null, // no pruning — keep everything we get
+        evictAt: 15000,
+        evictBelowRank: 65,
+      }
+    : {
+        maxMatches: 200,
+        minRankTier: 65,       // Ancient 5+
+        maxPages: 20,
+        pruneWindowDays: 7,
+        evictAt: 15000,
+        evictBelowRank: 65,
+      };
+
+  console.log(`[ingest] Mode: ${isBackfill ? "BACKFILL (all ranks, no prune)" : "CRON (Ancient 5+, 7-day window)"}`);
+
+  runIngest(cliOptions)
     .then((r) => { console.log("[ingest] Complete:", r); process.exit(0); })
     .catch((e) => { console.error("[ingest] Error:", e); process.exit(1); });
 }

@@ -11,6 +11,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "ingest": "tsx scripts/ingest.ts",
+    "backfill": "tsx scripts/ingest.ts --backfill",
     "aggregate": "tsx scripts/aggregate.ts"
   },
   "dependencies": {
