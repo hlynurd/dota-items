@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   integer,
+  text,
   timestamp,
   primaryKey,
 } from "drizzle-orm/pg-core";
@@ -52,3 +53,28 @@ export const item_win_rates = pgTable("item_win_rates", {
   wins:             integer("wins").notNull(),
   updated_at:       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [primaryKey({ columns: [t.hero_id, t.item_id, t.opponent_hero_id, t.before_minute] })]);
+
+// ─── Marginal win rate tables ─────────────────────────────────────────────────
+
+// Team-level item win rates conditioned on a context hero being present.
+// "When anyone buys item X and hero Y is on the enemy/ally team, what's the win rate?"
+// ~130x denser than hero-specific item_win_rates (no hero_id dimension).
+export const item_marginal_win_rates = pgTable("item_marginal_win_rates", {
+  item_id:          integer("item_id").notNull(),
+  context_hero_id:  integer("context_hero_id").notNull(), // the enemy or ally hero
+  context_side:     text("context_side").notNull(),        // 'enemy' | 'ally'
+  before_minute:    integer("before_minute").notNull(),    // 10 | 20 | 30 | 40 | 50 | 999
+  games:            integer("games").notNull(),
+  wins:             integer("wins").notNull(),
+  updated_at:       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.item_id, t.context_hero_id, t.context_side, t.before_minute] })]);
+
+// Unconditional item win rates — "when anyone buys item X, what's the win rate?"
+// Used as the baseline for computing diffs.
+export const item_baseline_win_rates = pgTable("item_baseline_win_rates", {
+  item_id:          integer("item_id").notNull(),
+  before_minute:    integer("before_minute").notNull(),
+  games:            integer("games").notNull(),
+  wins:             integer("wins").notNull(),
+  updated_at:       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.item_id, t.before_minute] })]);

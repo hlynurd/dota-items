@@ -8,7 +8,7 @@ interface Props {
 
 export default function ItemChip({ item, size = "md" }: Props) {
   const winPct = (item.win_rate * 100).toFixed(1);
-  const diff = item.win_rate - item.overall_win_rate;
+  const diff = item.win_rate - (item.baseline_win_rate ?? 0.5);
   const diffPct = (Math.abs(diff) * 100).toFixed(1);
   const diffSign = diff >= 0 ? "+" : "−";
   const diffColor = diff >= 0.005 ? "text-green-400" : diff <= -0.005 ? "text-red-400" : "text-zinc-600";

@@ -27,23 +27,37 @@ export interface DraftInput {
 
 export type Confidence = "high" | "medium" | "low";
 
-// Per-enemy breakdown included in ItemRecommendation for debugging
+// Per-enemy breakdown included in ItemRecommendation for debugging (legacy hero-specific)
 export interface ItemDebugEntry {
   hero_id: number;
   localized_name: string;
-  games: number;      // games where hero H bought item I vs this enemy
-  wins: number;       // wins among those games
-  smoothed_wr: number; // after Bayesian smoothing toward pairwise win rate
+  games: number;
+  wins: number;
+  smoothed_wr: number;
+}
+
+// Marginal debug: team-level item stats conditioned on a context hero
+export interface MarginalDebugEntry {
+  hero_id: number;
+  localized_name: string;
+  side: "enemy" | "ally";
+  games: number;
+  wins: number;
+  marginal_wr: number;  // win rate when this item is bought and this hero is present
+  baseline_wr: number;  // win rate when this item is bought regardless of context
+  diff: number;          // marginal_wr - baseline_wr
 }
 
 export interface ItemRecommendation {
   item_id: number;
   item_name: string; // internal name, e.g. "blink"
   display_name: string; // e.g. "Blink Dagger"
-  win_rate: number;          // 0–1, smoothed win rate vs this specific enemy lineup
-  overall_win_rate: number;  // 0–1, win rate for this item on this hero regardless of enemies
+  win_rate: number;          // 0–1, combined marginal score vs this lineup
+  baseline_win_rate: number; // 0–1, unconditional win rate for this item
   confidence: Confidence;
-  debug?: ItemDebugEntry[]; // per-enemy game counts, omitted in non-debug builds
+  enemy_debug?: MarginalDebugEntry[];
+  ally_debug?: MarginalDebugEntry[];
+  debug?: ItemDebugEntry[]; // legacy, kept for backwards compat
 }
 
 export interface TimingBucket {

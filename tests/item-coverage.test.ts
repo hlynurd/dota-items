@@ -130,7 +130,7 @@ describe("component filter", () => {
 import { db } from "@/lib/db/client";
 import { sql } from "drizzle-orm";
 
-describe("DB item data", () => {
+describe("DB item data (hero-specific, legacy)", () => {
   it("Eul's (item 100) has win rate data for Warlock (hero 37)", async () => {
     const res = await db.execute<{ games: number }>(sql`
       SELECT games FROM item_win_rates
@@ -148,31 +148,38 @@ describe("DB item data", () => {
     expect(res.rows.length).toBe(1);
     expect(res.rows[0].games).toBeGreaterThan(0);
   });
+});
 
-  it("Diffusal Blade (item 174) has data for Slark (hero 93)", async () => {
+describe("DB marginal data", () => {
+  it("Eul's (item 100) has marginal data vs Axe (hero 2)", async () => {
     const res = await db.execute<{ games: number }>(sql`
-      SELECT games FROM item_win_rates
-      WHERE hero_id = 93 AND item_id = 174 AND opponent_hero_id = -1 AND before_minute = 999
+      SELECT games FROM item_marginal_win_rates
+      WHERE item_id = 100 AND context_hero_id = 2 AND context_side = 'enemy' AND before_minute = 999
     `);
     expect(res.rows.length).toBe(1);
-    expect(res.rows[0].games).toBeGreaterThan(0);
+    expect(res.rows[0].games).toBeGreaterThan(5); // team-level = much more data
   });
 
-  it("Maelstrom (item 75) has data for Juggernaut (hero 8)", async () => {
+  it("BKB (item 116) has marginal data vs Axe", async () => {
     const res = await db.execute<{ games: number }>(sql`
-      SELECT games FROM item_win_rates
-      WHERE hero_id = 8 AND item_id = 75 AND opponent_hero_id = -1 AND before_minute = 999
+      SELECT games FROM item_marginal_win_rates
+      WHERE item_id = 116 AND context_hero_id = 2 AND context_side = 'enemy' AND before_minute = 999
     `);
     expect(res.rows.length).toBe(1);
-    expect(res.rows[0].games).toBeGreaterThan(0);
+    expect(res.rows[0].games).toBeGreaterThan(5);
   });
 
-  it("has per-enemy breakdown for Eul's on Warlock vs Axe (hero 2)", async () => {
-    const res = await db.execute<{ games: number }>(sql`
-      SELECT games FROM item_win_rates
-      WHERE hero_id = 37 AND item_id = 100 AND opponent_hero_id = 2 AND before_minute = 999
+  it("baseline exists for common items", async () => {
+    const res = await db.execute<{ cnt: string }>(sql`
+      SELECT COUNT(*)::text AS cnt FROM item_baseline_win_rates WHERE before_minute = 999
     `);
-    expect(res.rows.length).toBe(1);
-    expect(res.rows[0].games).toBeGreaterThan(0);
+    expect(parseInt(res.rows[0].cnt)).toBeGreaterThan(50); // should have many items
+  });
+
+  it("ally marginals exist", async () => {
+    const res = await db.execute<{ cnt: string }>(sql`
+      SELECT COUNT(*)::text AS cnt FROM item_marginal_win_rates WHERE context_side = 'ally' AND before_minute = 999
+    `);
+    expect(parseInt(res.rows[0].cnt)).toBeGreaterThan(100);
   });
 });

@@ -116,87 +116,108 @@ export default function HeroBuildCard({ build }: { build: HeroBuild }) {
             </div>
           </div>
         )}
-        {/* Debug: item × enemy game counts (collapsed by default) */}
+        {/* Debug: marginal item × context hero diffs (collapsed by default) */}
         {(() => {
-          const phaseItems = PHASES.flatMap(({ key }) => phases[key] ?? [])
-            .filter((item) => item.debug && item.debug.length > 0);
-          // Deduplicate timing items vs phase items by item_id
-          const phaseItemIds = new Set(phaseItems.map((i) => i.item_id));
-          const timingItems = timing_winrates
-            .flatMap((b) => b.top_items)
-            .filter((item) => item.debug && item.debug.length > 0 && !phaseItemIds.has(item.item_id))
+          const allPhaseItems = PHASES.flatMap(({ key }) => phases[key] ?? [])
             .filter((item, idx, arr) => arr.findIndex((x) => x.item_id === item.item_id) === idx);
 
-          const allItems = [...phaseItems, ...timingItems];
-          if (!allItems.length) return null;
-          const enemies = allItems[0].debug!;
+          if (!allPhaseItems.length || !allPhaseItems[0].enemy_debug?.length) return null;
+          const enemies = allPhaseItems[0].enemy_debug!;
+          const allies = allPhaseItems[0].ally_debug ?? [];
+
+          const fmtDiff = (d: number) => {
+            const pct = (Math.abs(d) * 100).toFixed(1);
+            if (d >= 0.005) return `+${pct}%`;
+            if (d <= -0.005) return `−${pct}%`;
+            return `${pct}%`;
+          };
+          const diffColor = (d: number) =>
+            d >= 0.005 ? "text-green-500" : d <= -0.005 ? "text-red-500" : "text-zinc-600";
 
           return (
             <details className="mt-1">
               <summary className="text-xs text-zinc-700 hover:text-zinc-500 cursor-pointer select-none">
-                debug: item × enemy coverage
+                debug: marginal item × hero diffs
               </summary>
-              <div className="overflow-x-auto mt-2">
-                <table className="text-xs border-collapse">
-                  <thead>
-                    <tr className="text-zinc-700">
-                      <th className="text-left pb-1 pr-4 font-mono font-normal">item</th>
-                      {enemies.map((e) => (
-                        <th key={e.hero_id} className="text-left pb-1 pr-3 font-mono font-normal whitespace-nowrap">
-                          {e.localized_name}
-                        </th>
+              <div className="overflow-x-auto mt-2 flex flex-col gap-4">
+                {/* Enemy context table */}
+                <div>
+                  <div className="text-zinc-600 font-mono text-xs mb-1">— vs enemies (team-level) —</div>
+                  <table className="text-xs border-collapse">
+                    <thead>
+                      <tr className="text-zinc-700">
+                        <th className="text-left pb-1 pr-4 font-mono font-normal">item</th>
+                        <th className="text-left pb-1 pr-3 font-mono font-normal">base</th>
+                        {enemies.map((e) => (
+                          <th key={e.hero_id} className="text-left pb-1 pr-3 font-mono font-normal whitespace-nowrap">
+                            {e.localized_name}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {allPhaseItems.map((item) => (
+                        <tr key={item.item_id} className="border-t border-zinc-800/40">
+                          <td className="py-0.5 pr-4 text-zinc-500 truncate max-w-[100px]">
+                            {item.display_name}
+                          </td>
+                          <td className="py-0.5 pr-3 font-mono text-zinc-500">
+                            {((item.baseline_win_rate ?? 0.5) * 100).toFixed(0)}%
+                          </td>
+                          {(item.enemy_debug ?? []).map((e) => (
+                            <td
+                              key={e.hero_id}
+                              className={`py-0.5 pr-3 font-mono whitespace-nowrap ${diffColor(e.diff)}`}
+                              title={`${e.wins}W / ${e.games}G — ${(e.marginal_wr * 100).toFixed(1)}% (base ${(e.baseline_wr * 100).toFixed(1)}%)`}
+                            >
+                              {fmtDiff(e.diff)} <span className="text-zinc-700">({e.games})</span>
+                            </td>
+                          ))}
+                        </tr>
                       ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {phaseItems.length > 0 && (
-                      <tr>
-                        <td colSpan={enemies.length + 1} className="pt-1 pb-0.5 text-zinc-700 font-mono text-xs">
-                          — phase items —
-                        </td>
-                      </tr>
-                    )}
-                    {phaseItems.map((item) => (
-                      <tr key={item.item_id} className="border-t border-zinc-800/40">
-                        <td className="py-0.5 pr-4 text-zinc-500 truncate max-w-[100px]">
-                          {item.display_name}
-                        </td>
-                        {item.debug!.map((e) => (
-                          <td
-                            key={e.hero_id}
-                            className="py-0.5 pr-3 font-mono text-zinc-600 whitespace-nowrap"
-                            title={`${e.wins}W / ${e.games}G — smoothed ${(e.smoothed_wr * 100).toFixed(1)}%`}
-                          >
-                            {e.games}
-                          </td>
+                    </tbody>
+                  </table>
+                </div>
+                {/* Ally context table */}
+                {allies.length > 0 && (
+                  <div>
+                    <div className="text-zinc-600 font-mono text-xs mb-1">— with allies (team-level) —</div>
+                    <table className="text-xs border-collapse">
+                      <thead>
+                        <tr className="text-zinc-700">
+                          <th className="text-left pb-1 pr-4 font-mono font-normal">item</th>
+                          <th className="text-left pb-1 pr-3 font-mono font-normal">base</th>
+                          {allies.map((a) => (
+                            <th key={a.hero_id} className="text-left pb-1 pr-3 font-mono font-normal whitespace-nowrap">
+                              {a.localized_name}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {allPhaseItems.map((item) => (
+                          <tr key={item.item_id} className="border-t border-zinc-800/40">
+                            <td className="py-0.5 pr-4 text-zinc-500 truncate max-w-[100px]">
+                              {item.display_name}
+                            </td>
+                            <td className="py-0.5 pr-3 font-mono text-zinc-500">
+                              {((item.baseline_win_rate ?? 0.5) * 100).toFixed(0)}%
+                            </td>
+                            {(item.ally_debug ?? []).map((a) => (
+                              <td
+                                key={a.hero_id}
+                                className={`py-0.5 pr-3 font-mono whitespace-nowrap ${diffColor(a.diff)}`}
+                                title={`${a.wins}W / ${a.games}G — ${(a.marginal_wr * 100).toFixed(1)}% (base ${(a.baseline_wr * 100).toFixed(1)}%)`}
+                              >
+                                {fmtDiff(a.diff)} <span className="text-zinc-700">({a.games})</span>
+                              </td>
+                            ))}
+                          </tr>
                         ))}
-                      </tr>
-                    ))}
-                    {timingItems.length > 0 && (
-                      <tr>
-                        <td colSpan={enemies.length + 1} className="pt-2 pb-0.5 text-zinc-700 font-mono text-xs">
-                          — timing items —
-                        </td>
-                      </tr>
-                    )}
-                    {timingItems.map((item) => (
-                      <tr key={item.item_id} className="border-t border-zinc-800/40">
-                        <td className="py-0.5 pr-4 text-zinc-500 truncate max-w-[100px]">
-                          {item.display_name}
-                        </td>
-                        {item.debug!.map((e) => (
-                          <td
-                            key={e.hero_id}
-                            className="py-0.5 pr-3 font-mono text-zinc-600 whitespace-nowrap"
-                            title={`${e.wins}W / ${e.games}G — smoothed ${(e.smoothed_wr * 100).toFixed(1)}%`}
-                          >
-                            {e.games}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </details>
           );

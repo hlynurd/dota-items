@@ -4,21 +4,20 @@ import {
   getItemsMap,
   topItemsFromBucket,
 } from "../opendota/client";
-import { getItemWinRatesForHero } from "../db/queries";
-import type { ItemWinRateRow } from "../db/queries";
+import { getItemMarginals, getItemBaselines } from "../db/queries";
+import type { ItemMarginalRow, ItemBaselineRow } from "../db/queries";
 import type { OpenDotaItemsMap } from "../opendota/types";
 import type {
   DraftInput,
   Hero,
   HeroBuild,
-  ItemDebugEntry,
+  MarginalDebugEntry,
   ItemRecommendation,
   TimingBucket,
   Confidence,
 } from "../agent/types";
 
-const OVERALL_SENTINEL = -1;
-const SMOOTHING_K = 50;
+const SMOOTHING_K = 10; // lower than before (50) — marginal data is ~130x denser
 
 // ─── Item resolution ──────────────────────────────────────────────────────────
 
@@ -33,18 +32,13 @@ function resolveItem(
   };
 }
 
-const MIN_ITEM_COST = 2000; // items below this that are components are always upgraded
+const MIN_ITEM_COST = 2000;
 
 function buildComponentSet(itemsMap: OpenDotaItemsMap): Set<string> {
-  // Collect every item name that appears as a component of another item
   const components = new Set<string>();
   for (const item of Object.values(itemsMap)) {
     for (const c of item.components ?? []) components.add(c);
   }
-  // Keep items that are crafted (have components) AND cost >= 2000 gold.
-  // Cheap intermediates like Perseverance (1700), Buckler (200), Oblivion Staff (1500)
-  // are always upgraded and should stay filtered. Real items like Eul's (2625),
-  // Shadow Blade (3000), Maelstrom (2700) are kept.
   for (const [name, item] of Object.entries(itemsMap)) {
     if (item.components && item.components.length > 0 && item.cost >= MIN_ITEM_COST) {
       components.delete(name);
@@ -53,73 +47,94 @@ function buildComponentSet(itemsMap: OpenDotaItemsMap): Set<string> {
   return components;
 }
 
-// ─── Win rate index ───────────────────────────────────────────────────────────
+// ─── Marginal indexes ─────────────────────────────────────────────────────────
 
-// Organise DB rows into fast lookup structures:
-//   overallByItem: itemId → { games, wins } (opponent_hero_id = -1)
-//   vsEnemyByItem: enemyId → itemId → { games, wins }
 interface WrEntry { games: number; wins: number }
 
-function buildWrIndex(rows: ItemWinRateRow[], enemies: Hero[], beforeMinute: number) {
-  const overallByItem = new Map<number, WrEntry>();
-  const vsEnemyByItem = new Map<number, Map<number, WrEntry>>();
+// key: "item_id:context_hero_id" → { games, wins }
+type MarginalIndex = Map<string, WrEntry>;
+// key: "item_id" → { games, wins }
+type BaselineIndex = Map<string, WrEntry>;
 
-  for (const enemy of enemies) vsEnemyByItem.set(enemy.id, new Map());
-
+function buildMarginalIndex(
+  rows: ItemMarginalRow[],
+  side: "enemy" | "ally",
+  beforeMinute: number
+): MarginalIndex {
+  const idx: MarginalIndex = new Map();
   for (const row of rows) {
-    if (row.before_minute !== beforeMinute) continue;
-    if (row.opponent_hero_id === OVERALL_SENTINEL) {
-      overallByItem.set(row.item_id, { games: row.games, wins: row.wins });
-    } else {
-      vsEnemyByItem.get(row.opponent_hero_id)?.set(row.item_id, { games: row.games, wins: row.wins });
-    }
+    if (row.context_side !== side || row.before_minute !== beforeMinute) continue;
+    idx.set(`${row.item_id}:${row.context_hero_id}`, { games: row.games, wins: row.wins });
   }
-
-  return { overallByItem, vsEnemyByItem };
+  return idx;
 }
 
-// ─── Smoothed lineup score ────────────────────────────────────────────────────
+function buildBaselineIndex(rows: ItemBaselineRow[], beforeMinute: number): BaselineIndex {
+  const idx: BaselineIndex = new Map();
+  for (const row of rows) {
+    if (row.before_minute !== beforeMinute) continue;
+    idx.set(`${row.item_id}`, { games: row.games, wins: row.wins });
+  }
+  return idx;
+}
 
-function computeLineupScore(
+// ─── Marginal scoring ─────────────────────────────────────────────────────────
+
+function computeMarginalScore(
   itemId: number,
-  enemies: Hero[],
-  vsEnemyByItem: Map<number, Map<number, WrEntry>>,
-  pairwiseWinRates: Map<number, number>
-): { win_rate: number; confidence: Confidence; debug: ItemDebugEntry[] } {
-  if (enemies.length === 0) return { win_rate: 0.5, confidence: "low", debug: [] };
+  heroes: Hero[],
+  margIdx: MarginalIndex,
+  basIdx: BaselineIndex,
+  side: "enemy" | "ally",
+): { score: number; totalGames: number; debug: MarginalDebugEntry[] } {
+  const baseline = basIdx.get(`${itemId}`);
+  const baselineWr = baseline && baseline.games > 0 ? baseline.wins / baseline.games : 0.5;
+
+  if (heroes.length === 0) return { score: baselineWr, totalGames: 0, debug: [] };
 
   let totalSmoothed = 0;
   let totalGames = 0;
-  const debug: ItemDebugEntry[] = [];
+  const debug: MarginalDebugEntry[] = [];
 
-  for (const enemy of enemies) {
-    const row = vsEnemyByItem.get(enemy.id)?.get(itemId);
+  for (const hero of heroes) {
+    const row = margIdx.get(`${itemId}:${hero.id}`);
     const games = row?.games ?? 0;
     const wins = row?.wins ?? 0;
-    const pairwiseWr = pairwiseWinRates.get(enemy.id) ?? 0.5;
-    const smoothed_wr = (wins + SMOOTHING_K * pairwiseWr) / (games + SMOOTHING_K);
+    const marginalWr = games > 0 ? wins / games : baselineWr;
+    const smoothed = (wins + SMOOTHING_K * baselineWr) / (games + SMOOTHING_K);
 
-    debug.push({ hero_id: enemy.id, localized_name: enemy.localized_name, games, wins, smoothed_wr });
-    totalSmoothed += smoothed_wr;
+    debug.push({
+      hero_id: hero.id,
+      localized_name: hero.localized_name,
+      side,
+      games,
+      wins,
+      marginal_wr: Math.round(marginalWr * 1000) / 1000,
+      baseline_wr: Math.round(baselineWr * 1000) / 1000,
+      diff: Math.round((marginalWr - baselineWr) * 1000) / 1000,
+    });
+
+    totalSmoothed += smoothed;
     totalGames += games;
   }
 
-  const win_rate = Math.round((totalSmoothed / enemies.length) * 1000) / 1000;
-  const avgGames = totalGames / enemies.length;
-  const confidence: Confidence = avgGames >= 100 ? "high" : avgGames >= 25 ? "medium" : "low";
-
-  return { win_rate, confidence, debug };
+  return {
+    score: Math.round((totalSmoothed / heroes.length) * 1000) / 1000,
+    totalGames,
+    debug,
+  };
 }
 
-// ─── Phase builder ────────────────────────────────────────────────────────────
+// ─── Phase builder (marginal) ─────────────────────────────────────────────────
 
 function buildPhaseItems(
   bucket: Record<string, number>,
   n: number,
   enemies: Hero[],
-  vsEnemyByItem: Map<number, Map<number, WrEntry>>,
-  overallByItem: Map<number, WrEntry>,
-  pairwiseWinRates: Map<number, number>,
+  allies: Hero[],
+  enemyIdx: MarginalIndex,
+  allyIdx: MarginalIndex,
+  basIdx: BaselineIndex,
   itemsMap: OpenDotaItemsMap,
   componentSet: Set<string>
 ): ItemRecommendation[] {
@@ -132,14 +147,29 @@ function buildPhaseItems(
       return entry ? !componentSet.has(entry[0]) : false;
     })
     .map((item_id) => {
-      const { win_rate, confidence, debug } = computeLineupScore(
-        item_id, enemies, vsEnemyByItem, pairwiseWinRates
-      );
-      const overall = overallByItem.get(item_id);
-      const overall_win_rate = overall && overall.games > 0
-        ? Math.round((overall.wins / overall.games) * 1000) / 1000
-        : win_rate;
-      return { item_id, ...resolveItem(itemsMap, item_id), win_rate, overall_win_rate, confidence, debug };
+      const enemyResult = computeMarginalScore(item_id, enemies, enemyIdx, basIdx, "enemy");
+      const allyResult = computeMarginalScore(item_id, allies, allyIdx, basIdx, "ally");
+
+      // Combined: 70% enemy context, 30% ally context
+      const win_rate = Math.round((0.7 * enemyResult.score + 0.3 * allyResult.score) * 1000) / 1000;
+      const baseline = basIdx.get(`${item_id}`);
+      const baseline_win_rate = baseline && baseline.games > 0
+        ? Math.round((baseline.wins / baseline.games) * 1000) / 1000
+        : 0.5;
+
+      const avgGames = (enemyResult.totalGames + allyResult.totalGames) /
+        (enemies.length + allies.length || 1);
+      const confidence: Confidence = avgGames >= 100 ? "high" : avgGames >= 25 ? "medium" : "low";
+
+      return {
+        item_id,
+        ...resolveItem(itemsMap, item_id),
+        win_rate,
+        baseline_win_rate,
+        confidence,
+        enemy_debug: enemyResult.debug,
+        ally_debug: allyResult.debug,
+      };
     })
     .sort((a, b) => b.win_rate - a.win_rate)
     .slice(0, n);
@@ -149,50 +179,48 @@ function buildPhaseItems(
 
 async function analyzeHero(
   hero: Hero,
+  allies: Hero[],
   enemies: Hero[],
-  itemsMap: OpenDotaItemsMap
+  itemsMap: OpenDotaItemsMap,
+  marginalRows: ItemMarginalRow[],
+  baselineRows: ItemBaselineRow[],
 ): Promise<HeroBuild> {
-  const [popularity, allMatchups, dbRows] = await Promise.all([
+  const [popularity, allMatchups] = await Promise.all([
     getHeroItemPopularity(hero.id),
     getHeroMatchups(hero.id),
-    getItemWinRatesForHero(hero.id, enemies.map((e) => e.id)),
   ]);
 
-  // Hero overall win rate from matchup aggregates (pairwise vs everyone)
+  // Hero overall win rate
   const totalGames = allMatchups.reduce((s, m) => s + m.games_played, 0);
   const totalWins = allMatchups.reduce((s, m) => s + m.wins, 0);
   const overallWinRate = totalGames > 0 ? totalWins / totalGames : 0.5;
 
-  // Pairwise win rate per enemy (smoothing prior)
+  // Hero-level matchup delta
   const pairwiseWinRates = new Map<number, number>();
   for (const enemy of enemies) {
     const matchup = allMatchups.find((m) => m.hero_id === enemy.id);
-    const wr = matchup && matchup.games_played > 0
-      ? matchup.wins / matchup.games_played
-      : overallWinRate;
-    pairwiseWinRates.set(enemy.id, wr);
+    pairwiseWinRates.set(enemy.id, matchup && matchup.games_played > 0
+      ? matchup.wins / matchup.games_played : overallWinRate);
   }
-
-  // Hero-level matchup delta (shown in card header)
   const enemyWrs = [...pairwiseWinRates.values()];
   const avgVsEnemies = enemyWrs.length > 0
-    ? enemyWrs.reduce((s, w) => s + w, 0) / enemyWrs.length
-    : overallWinRate;
+    ? enemyWrs.reduce((s, w) => s + w, 0) / enemyWrs.length : overallWinRate;
   const matchupDelta = Math.round((avgVsEnemies - overallWinRate) * 1000) / 1000;
 
   const componentSet = buildComponentSet(itemsMap);
 
-  // Phase items use the "999" (any time) bucket — broadest sample
-  const { overallByItem: overallAny, vsEnemyByItem: vsEnemyAny } =
-    buildWrIndex(dbRows, enemies, 999);
+  // Build marginal indexes for the "999" (any time) bucket — used for phase items
+  const enemyIdx999 = buildMarginalIndex(marginalRows, "enemy", 999);
+  const allyIdx999 = buildMarginalIndex(marginalRows, "ally", 999);
+  const basIdx999 = buildBaselineIndex(baselineRows, 999);
 
   const phases: HeroBuild["phases"] = {
-    early:       buildPhaseItems(popularity.early_game_items,  6, enemies, vsEnemyAny, overallAny, pairwiseWinRates, itemsMap, componentSet),
-    core:        buildPhaseItems(popularity.mid_game_items,    6, enemies, vsEnemyAny, overallAny, pairwiseWinRates, itemsMap, componentSet),
-    situational: buildPhaseItems(popularity.late_game_items,   6, enemies, vsEnemyAny, overallAny, pairwiseWinRates, itemsMap, componentSet),
+    early:       buildPhaseItems(popularity.early_game_items,  6, enemies, allies, enemyIdx999, allyIdx999, basIdx999, itemsMap, componentSet),
+    core:        buildPhaseItems(popularity.mid_game_items,    6, enemies, allies, enemyIdx999, allyIdx999, basIdx999, itemsMap, componentSet),
+    situational: buildPhaseItems(popularity.late_game_items,   6, enemies, allies, enemyIdx999, allyIdx999, basIdx999, itemsMap, componentSet),
   };
 
-  // Timing buckets use per-bucket win rates
+  // Timing buckets
   const TIMING: { before_minute: TimingBucket["before_minute"]; bucket: Record<string, number> }[] = [
     { before_minute: 10, bucket: popularity.early_game_items },
     { before_minute: 20, bucket: popularity.early_game_items },
@@ -202,7 +230,8 @@ async function analyzeHero(
   ];
 
   const timing_winrates: TimingBucket[] = TIMING.map(({ before_minute, bucket }) => {
-    const { overallByItem, vsEnemyByItem } = buildWrIndex(dbRows, enemies, before_minute);
+    const basIdx = buildBaselineIndex(baselineRows, before_minute);
+    const enemyIdx = buildMarginalIndex(marginalRows, "enemy", before_minute);
 
     return {
       before_minute,
@@ -212,15 +241,15 @@ async function analyzeHero(
           return entry ? !componentSet.has(entry[0]) : false;
         })
         .map(({ item_id }) => {
-          const overall = overallByItem.get(item_id);
-          const win_rate = overall && overall.games > 0
-            ? Math.round((overall.wins / overall.games) * 1000) / 1000
+          const baseline = basIdx.get(`${item_id}`);
+          const win_rate = baseline && baseline.games > 0
+            ? Math.round((baseline.wins / baseline.games) * 1000) / 1000
             : overallWinRate;
-          const overall_games = overall?.games ?? 0;
-          const { debug } = computeLineupScore(item_id, enemies, vsEnemyByItem, pairwiseWinRates);
-          return { item_id, ...resolveItem(itemsMap, item_id), win_rate, overall_games, debug };
+          const overall_games = baseline?.games ?? 0;
+          const { debug } = computeMarginalScore(item_id, enemies, enemyIdx, basIdx, "enemy");
+          return { item_id, ...resolveItem(itemsMap, item_id), win_rate, overall_games, debug: debug as any };
         })
-        .filter((item) => item.overall_games >= 3) // skip 1-game 100% noise
+        .filter((item) => item.overall_games >= 3)
         .slice(0, 3),
     };
   });
@@ -232,13 +261,21 @@ async function analyzeHero(
 
 export async function analyzeDraft(draft: DraftInput): Promise<HeroBuild[]> {
   const allHeroes = [...draft.radiant, ...draft.dire];
-  const itemsMap = await getItemsMap();
+  const allHeroIds = allHeroes.map((h) => h.id);
+
+  // Fetch shared data ONCE for the entire draft
+  const [itemsMap, marginalRows, baselineRows] = await Promise.all([
+    getItemsMap(),
+    getItemMarginals(allHeroIds),
+    getItemBaselines(),
+  ]);
 
   return Promise.all(
     allHeroes.map((hero) => {
       const isRadiant = draft.radiant.some((h) => h.id === hero.id);
       const enemies = isRadiant ? draft.dire : draft.radiant;
-      return analyzeHero(hero, enemies, itemsMap);
+      const allies = (isRadiant ? draft.radiant : draft.dire).filter((h) => h.id !== hero.id);
+      return analyzeHero(hero, allies, enemies, itemsMap, marginalRows, baselineRows);
     })
   );
 }

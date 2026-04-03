@@ -1,4 +1,4 @@
-import { runAggregate } from "@/scripts/aggregate";
+import { runAggregate, runMarginalAggregate } from "@/scripts/aggregate";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -10,7 +10,7 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   try {
-    const result = await runAggregate();
+    const [result, marginal] = await Promise.all([runAggregate(), runMarginalAggregate()]);
     return Response.json({ ok: true, ...result });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
