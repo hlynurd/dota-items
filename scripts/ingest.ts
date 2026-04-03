@@ -23,8 +23,8 @@
 import { config } from "dotenv";
 config({ path: ".env.local" });
 
-import { db } from "../lib/db/client";
 import { matches, item_timings } from "../lib/db/schema";
+import { getShards, getLeastFullShard, type ShardDb } from "../lib/db/shards";
 import { inArray, lt, sql } from "drizzle-orm";
 
 const OPENDOTA = "https://api.opendota.com/api";
@@ -147,7 +147,6 @@ export async function runIngest(options: IngestOptions = {}): Promise<{ inserted
     evictBelowRank = 65,
   } = options;
 
-  // Higher multiplier when rank filter is strict (low Ancient+ hit rate in feed)
   const candidateMultiplier = minRankTier >= 65 ? 10 : 3;
   const cutoff = pruneWindowDays != null
     ? new Date(Date.now() - pruneWindowDays * 24 * 60 * 60 * 1000)
@@ -155,6 +154,11 @@ export async function runIngest(options: IngestOptions = {}): Promise<{ inserted
 
   let inserted = 0;
   let skipped = 0;
+
+  // Pick the least-full shard for writes
+  const shards = getShards();
+  const { shard: targetShard, index: shardIdx } = await getLeastFullShard();
+  console.log(`[ingest] Using shard ${shardIdx} of ${shards.length} for writes`);
 
   console.log("[ingest] Fetching item constants...");
   const [componentSet, itemIdMap] = await Promise.all([fetchComponentSet(), fetchItemIdMap()]);
@@ -178,21 +182,26 @@ export async function runIngest(options: IngestOptions = {}): Promise<{ inserted
   }
   console.log(`[ingest] ${candidateIds.length} candidate IDs from ${pages} pages`);
 
-  // 2. Filter out already-ingested match IDs (batched — inArray has a 1000-element limit)
+  // 2. Filter out already-ingested match IDs — check ALL shards
   const existingIds = new Set<number>();
   for (let i = 0; i < candidateIds.length; i += 1000) {
     const chunk = candidateIds.slice(i, i + 1000);
-    const rows = await db
-      .select({ match_id: matches.match_id })
-      .from(matches)
-      .where(inArray(matches.match_id, chunk));
-    for (const r of rows) existingIds.add(r.match_id);
+    const results = await Promise.all(
+      shards.map((shard) =>
+        shard.select({ match_id: matches.match_id })
+          .from(matches)
+          .where(inArray(matches.match_id, chunk))
+      )
+    );
+    for (const rows of results) {
+      for (const r of rows) existingIds.add(r.match_id);
+    }
   }
   const toFetch = candidateIds.filter((id) => !existingIds.has(id)).slice(0, targetCandidates);
   skipped += existingIds.size;
-  console.log(`[ingest] ${toFetch.length} to fetch (${skipped} already in DB)`);
+  console.log(`[ingest] ${toFetch.length} to fetch (${skipped} already across ${shards.length} shards)`);
 
-  // 3. Fetch match details, filter, insert
+  // 3. Fetch match details, filter, insert into target shard
   let fetched = 0;
   for (let i = 0; i < toFetch.length && inserted < maxMatches; i += BATCH_SIZE) {
     const batch = toFetch.slice(i, i + BATCH_SIZE);
@@ -234,7 +243,7 @@ export async function runIngest(options: IngestOptions = {}): Promise<{ inserted
       if (timingRows.length === 0) { skipped++; continue; }
 
       try {
-        await db.insert(matches).values({
+        await targetShard.insert(matches).values({
           match_id: match.match_id,
           start_time: new Date(match.start_time * 1000),
           radiant_win: match.radiant_win,
@@ -244,7 +253,7 @@ export async function runIngest(options: IngestOptions = {}): Promise<{ inserted
           dire_0: dire[0], dire_1: dire[1], dire_2: dire[2],
           dire_3: dire[3], dire_4: dire[4],
         }).onConflictDoNothing();
-        await db.insert(item_timings).values(timingRows).onConflictDoNothing();
+        await targetShard.insert(item_timings).values(timingRows).onConflictDoNothing();
         inserted++;
         if (inserted % 25 === 0) console.log(`[ingest] ${inserted} inserted, ${fetched} fetched...`);
       } catch (err) {
@@ -256,48 +265,45 @@ export async function runIngest(options: IngestOptions = {}): Promise<{ inserted
     if (i + BATCH_SIZE < toFetch.length && inserted < maxMatches) await sleep(RATE_DELAY_MS);
   }
 
-  // 4. Time-based pruning — cascade delete item_timings first, then matches
+  // 4. Time-based pruning — run on ALL shards
   if (cutoff) {
-    await db.execute(sql`
-      DELETE FROM item_timings
-      WHERE match_id IN (
-        SELECT match_id FROM matches WHERE start_time < ${cutoff}
-      )
-    `);
-    await db.delete(matches).where(lt(matches.start_time, cutoff));
-    console.log(`[ingest] Pruned matches older than ${pruneWindowDays} days`);
+    for (const shard of shards) {
+      await shard.execute(sql`
+        DELETE FROM item_timings
+        WHERE match_id IN (SELECT match_id FROM matches WHERE start_time < ${cutoff})
+      `);
+      await shard.delete(matches).where(lt(matches.start_time, cutoff));
+    }
+    console.log(`[ingest] Pruned matches older than ${pruneWindowDays} days across ${shards.length} shards`);
   }
 
-  // 5. Eviction — when total >= evictAt, remove matches to stay at evictAt.
-  //    Order: low-rank matches first (avg_rank_tier < evictBelowRank), then oldest
-  //    regardless of rank. This lets backfill data get replaced by quality data over time.
-  const countResult = await db.execute<{ total: string }>(
-    sql`SELECT COUNT(*)::text AS total FROM matches`
-  );
-  const total = parseInt(countResult.rows[0]?.total ?? "0", 10);
-  if (total >= evictAt) {
-    const toEvict = total - evictAt + Math.min(inserted, 500);
-    console.log(`[ingest] ${total} matches >= ${evictAt}; evicting ${toEvict} (low-rank first, then oldest)`);
-    await db.execute(sql`
-      DELETE FROM item_timings
-      WHERE match_id IN (
-        SELECT match_id FROM matches
-        ORDER BY
-          CASE WHEN avg_rank_tier < ${evictBelowRank} THEN 0 ELSE 1 END ASC,
-          start_time ASC
-        LIMIT ${toEvict}
-      )
-    `);
-    await db.execute(sql`
-      DELETE FROM matches
-      WHERE match_id IN (
-        SELECT match_id FROM matches
-        ORDER BY
-          CASE WHEN avg_rank_tier < ${evictBelowRank} THEN 0 ELSE 1 END ASC,
-          start_time ASC
-        LIMIT ${toEvict}
-      )
-    `);
+  // 5. Eviction — count total across all shards, evict from the shard with most low-rank matches
+  let totalAcrossShards = 0;
+  for (const shard of shards) {
+    const r = await shard.execute<{ c: string }>(sql`SELECT COUNT(*)::text AS c FROM matches`);
+    totalAcrossShards += parseInt(r.rows[0]?.c ?? "0", 10);
+  }
+  if (totalAcrossShards >= evictAt) {
+    const toEvict = totalAcrossShards - evictAt + Math.min(inserted, 500);
+    console.log(`[ingest] ${totalAcrossShards} total matches >= ${evictAt}; evicting ${toEvict} (low-rank first)`);
+    // Evict proportionally from each shard
+    const perShard = Math.ceil(toEvict / shards.length);
+    for (const shard of shards) {
+      await shard.execute(sql`
+        DELETE FROM item_timings WHERE match_id IN (
+          SELECT match_id FROM matches
+          ORDER BY CASE WHEN avg_rank_tier < ${evictBelowRank} THEN 0 ELSE 1 END ASC, start_time ASC
+          LIMIT ${perShard}
+        )
+      `);
+      await shard.execute(sql`
+        DELETE FROM matches WHERE match_id IN (
+          SELECT match_id FROM matches
+          ORDER BY CASE WHEN avg_rank_tier < ${evictBelowRank} THEN 0 ELSE 1 END ASC, start_time ASC
+          LIMIT ${perShard}
+        )
+      `);
+    }
   }
 
   console.log(`[ingest] Done. Inserted: ${inserted}, skipped: ${skipped}, fetched: ${fetched}`);

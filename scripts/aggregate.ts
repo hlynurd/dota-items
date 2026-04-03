@@ -1,6 +1,6 @@
 /**
- * Aggregate script — reads raw match + item_timings and writes pre-computed
- * marginal and baseline win rates for fast lookup by /api/analyze.
+ * Aggregate script — reads raw match + item_timings from ALL shards and writes
+ * pre-computed marginal and baseline win rates to the primary DB.
  *
  * Run via: npx tsx scripts/aggregate.ts
  * Or triggered by Vercel Cron via POST /api/cron/aggregate
@@ -11,21 +11,18 @@
 import { config } from "dotenv";
 config({ path: ".env.local" });
 import { db } from "../lib/db/client";
-import { matches, item_timings, item_marginal_win_rates, item_baseline_win_rates } from "../lib/db/schema";
+import { getShards } from "../lib/db/shards";
+import { item_marginal_win_rates, item_baseline_win_rates } from "../lib/db/schema";
 import { sql } from "drizzle-orm";
 
 const BEFORE_MINUTES = [10, 20, 30, 40, 50, 999] as const;
 
 type BeforeMinute = typeof BEFORE_MINUTES[number];
 
-// ─── Aggregation logic ────────────────────────────────────────────────────────
-
 function timeToBucket(time_s: number): BeforeMinute[] {
   const minutes = time_s / 60;
   return BEFORE_MINUTES.filter((b) => b === 999 || minutes < b);
 }
-
-// ─── Marginal aggregation ─────────────────────────────────────────────────────
 
 interface MarginalRawRow extends Record<string, unknown> {
   match_id: number;
@@ -37,45 +34,39 @@ interface MarginalRawRow extends Record<string, unknown> {
   team_0: number; team_1: number; team_2: number; team_3: number; team_4: number;
 }
 
+const RAW_QUERY = sql`
+  SELECT
+    it.match_id, it.hero_id, it.item_id, it.time_s, it.won,
+    CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
+      THEN m.dire_0    ELSE m.radiant_0 END AS opp_0,
+    CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
+      THEN m.dire_1    ELSE m.radiant_1 END AS opp_1,
+    CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
+      THEN m.dire_2    ELSE m.radiant_2 END AS opp_2,
+    CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
+      THEN m.dire_3    ELSE m.radiant_3 END AS opp_3,
+    CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
+      THEN m.dire_4    ELSE m.radiant_4 END AS opp_4,
+    CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
+      THEN m.radiant_0 ELSE m.dire_0 END AS team_0,
+    CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
+      THEN m.radiant_1 ELSE m.dire_1 END AS team_1,
+    CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
+      THEN m.radiant_2 ELSE m.dire_2 END AS team_2,
+    CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
+      THEN m.radiant_3 ELSE m.dire_3 END AS team_3,
+    CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
+      THEN m.radiant_4 ELSE m.dire_4 END AS team_4
+  FROM item_timings it
+  JOIN matches m ON it.match_id = m.match_id
+`;
+
 export async function runMarginalAggregate(): Promise<{ marginal_rows: number; baseline_rows: number }> {
-  console.log("[marginal] Loading raw item timing data with team info...");
+  const shards = getShards();
+  console.log(`[marginal] Reading raw data from ${shards.length} shard(s)...`);
 
-  const raw = await db.execute<MarginalRawRow>(sql`
-    SELECT
-      it.match_id,
-      it.hero_id,
-      it.item_id,
-      it.time_s,
-      it.won,
-      CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
-        THEN m.dire_0    ELSE m.radiant_0 END AS opp_0,
-      CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
-        THEN m.dire_1    ELSE m.radiant_1 END AS opp_1,
-      CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
-        THEN m.dire_2    ELSE m.radiant_2 END AS opp_2,
-      CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
-        THEN m.dire_3    ELSE m.radiant_3 END AS opp_3,
-      CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
-        THEN m.dire_4    ELSE m.radiant_4 END AS opp_4,
-      CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
-        THEN m.radiant_0 ELSE m.dire_0 END AS team_0,
-      CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
-        THEN m.radiant_1 ELSE m.dire_1 END AS team_1,
-      CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
-        THEN m.radiant_2 ELSE m.dire_2 END AS team_2,
-      CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
-        THEN m.radiant_3 ELSE m.dire_3 END AS team_3,
-      CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
-        THEN m.radiant_4 ELSE m.dire_4 END AS team_4
-    FROM item_timings it
-    JOIN matches m ON it.match_id = m.match_id
-  `);
-
-  console.log(`[marginal] ${raw.rows.length} raw timing rows loaded`);
-
-  // Accumulate marginal: key = "item_id:context_hero_id:side:bucket"
+  // Accumulate across all shards
   const marginal = new Map<string, { games: number; wins: number }>();
-  // Accumulate baseline: key = "item_id:bucket"
   const baseline = new Map<string, { games: number; wins: number }>();
 
   const bumpMap = (map: Map<string, { games: number; wins: number }>, key: string, won: boolean) => {
@@ -85,30 +76,36 @@ export async function runMarginalAggregate(): Promise<{ marginal_rows: number; b
     map.set(key, cur);
   };
 
-  for (const row of raw.rows) {
-    const buckets = timeToBucket(row.time_s);
-    const opps = [row.opp_0, row.opp_1, row.opp_2, row.opp_3, row.opp_4];
-    const allies = [row.team_0, row.team_1, row.team_2, row.team_3, row.team_4]
-      .filter((id) => id !== row.hero_id);
+  let totalRawRows = 0;
+  for (let s = 0; s < shards.length; s++) {
+    const shard = shards[s];
+    const raw = await shard.execute<MarginalRawRow>(RAW_QUERY);
+    console.log(`[marginal] Shard ${s}: ${raw.rows.length} raw rows`);
+    totalRawRows += raw.rows.length;
 
-    for (const bucket of buckets) {
-      // Baseline (unconditional)
-      bumpMap(baseline, `${row.item_id}:${bucket}`, row.won);
-      // Enemy marginals
-      for (const opp of opps) {
-        bumpMap(marginal, `${row.item_id}:${opp}:enemy:${bucket}`, row.won);
-      }
-      // Ally marginals (excluding the buyer)
-      for (const ally of allies) {
-        bumpMap(marginal, `${row.item_id}:${ally}:ally:${bucket}`, row.won);
+    for (const row of raw.rows) {
+      const buckets = timeToBucket(row.time_s);
+      const opps = [row.opp_0, row.opp_1, row.opp_2, row.opp_3, row.opp_4];
+      const allies = [row.team_0, row.team_1, row.team_2, row.team_3, row.team_4]
+        .filter((id) => id !== row.hero_id);
+
+      for (const bucket of buckets) {
+        bumpMap(baseline, `${row.item_id}:${bucket}`, row.won);
+        for (const opp of opps) {
+          bumpMap(marginal, `${row.item_id}:${opp}:enemy:${bucket}`, row.won);
+        }
+        for (const ally of allies) {
+          bumpMap(marginal, `${row.item_id}:${ally}:ally:${bucket}`, row.won);
+        }
       }
     }
   }
 
-  console.log(`[marginal] ${marginal.size} marginal entries, ${baseline.size} baseline entries`);
+  console.log(`[marginal] ${totalRawRows} total raw rows → ${marginal.size} marginal, ${baseline.size} baseline entries`);
 
-  // Write baseline
+  // Write to PRIMARY DB (not shards)
   const BATCH = 500;
+
   const baselineEntries = [...baseline.entries()];
   let baseline_rows = 0;
   for (let i = 0; i < baselineEntries.length; i += BATCH) {
@@ -124,7 +121,6 @@ export async function runMarginalAggregate(): Promise<{ marginal_rows: number; b
   }
   console.log(`[marginal] Baseline rows written: ${baseline_rows}`);
 
-  // Write marginals
   const marginalEntries = [...marginal.entries()];
   let marginal_rows = 0;
   for (let i = 0; i < marginalEntries.length; i += BATCH) {
@@ -156,13 +152,8 @@ export async function runMarginalAggregate(): Promise<{ marginal_rows: number; b
   return { marginal_rows, baseline_rows };
 }
 
-// ─── CLI entry point ──────────────────────────────────────────────────────────
-
 if (process.argv[1]?.endsWith("aggregate.ts")) {
   runMarginalAggregate()
-    .then((result) => {
-      console.log("[aggregate] Complete:", result);
-      process.exit(0);
-    })
+    .then((result) => { console.log("[aggregate] Complete:", result); process.exit(0); })
     .catch((e) => { console.error("[aggregate] Error:", e); process.exit(1); });
 }

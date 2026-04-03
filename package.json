@@ -13,7 +13,8 @@
     "db:push": "drizzle-kit push",
     "ingest": "tsx scripts/ingest.ts",
     "backfill": "tsx scripts/ingest.ts --backfill",
-    "aggregate": "tsx scripts/aggregate.ts"
+    "aggregate": "tsx scripts/aggregate.ts",
+    "setup-shard": "tsx scripts/setup-shard.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
