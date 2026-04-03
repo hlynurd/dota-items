@@ -31,11 +31,18 @@ export default function HeroBuildCard({ build }: { build: HeroBuild }) {
         </div>
         <div>
           <h3 className="font-semibold text-lg">{hero.localized_name}</h3>
-          {posLabel && (
-            <span className="text-xs text-zinc-400 font-mono uppercase tracking-wide">
-              {posLabel}
-            </span>
-          )}
+          <div className="flex items-center gap-2 mt-0.5">
+            {posLabel && (
+              <span className="text-xs text-zinc-400 font-mono uppercase tracking-wide">
+                {posLabel}
+              </span>
+            )}
+            {build.matchup_delta !== 0 && (
+              <span className={`text-xs font-mono ${build.matchup_delta >= 0 ? "text-green-400" : "text-red-400"}`}>
+                {build.matchup_delta >= 0 ? "+" : ""}{(build.matchup_delta * 100).toFixed(1)}% vs this lineup
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -80,37 +87,29 @@ export default function HeroBuildCard({ build }: { build: HeroBuild }) {
                       <td className="py-2 pr-4 text-zinc-500 font-mono whitespace-nowrap">
                         &lt;{bucket.before_minute}m
                       </td>
-                      {bucket.top_items.slice(0, 3).map((item, idx) => {
-                        const delta = item.matchup_delta;
-                        const deltaColor = delta >= 0 ? "text-green-400" : "text-red-400";
-                        const sign = delta >= 0 ? "+" : "";
-                        return (
-                          <td key={idx} className="py-2 pr-4">
-                            <div className="flex items-center gap-1.5">
-                              <div className="w-6 h-5 rounded overflow-hidden bg-zinc-800 shrink-0">
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                  src={itemImgUrl(item.item_name)}
-                                  alt={item.display_name}
-                                  className="w-full h-full object-cover"
-                                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                                />
-                              </div>
-                              <div>
-                                <span className="text-zinc-300 truncate block max-w-[80px]">
-                                  {item.display_name}
-                                </span>
-                                <span className="text-zinc-500">
-                                  {(item.base_win_rate * 100).toFixed(1)}%{" "}
-                                  <span className={`${deltaColor} font-mono`}>
-                                    {sign}{(Math.abs(delta) * 100).toFixed(1)}%
-                                  </span>
-                                </span>
-                              </div>
+                      {bucket.top_items.slice(0, 3).map((item, idx) => (
+                        <td key={idx} className="py-2 pr-4">
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-6 h-5 rounded overflow-hidden bg-zinc-800 shrink-0">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={itemImgUrl(item.item_name)}
+                                alt={item.display_name}
+                                className="w-full h-full object-cover"
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                              />
                             </div>
-                          </td>
-                        );
-                      })}
+                            <div>
+                              <span className="text-zinc-300 truncate block max-w-[80px]">
+                                {item.display_name}
+                              </span>
+                              <span className="text-zinc-500">
+                                {(item.win_rate * 100).toFixed(1)}%
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+                      ))}
                     </tr>
                   ))}
                 </tbody>
@@ -118,6 +117,53 @@ export default function HeroBuildCard({ build }: { build: HeroBuild }) {
             </div>
           </div>
         )}
+        {/* Debug: item × enemy game counts (collapsed by default) */}
+        {(() => {
+          const allItems = PHASES.flatMap(({ key }) => phases[key] ?? [])
+            .filter((item) => item.debug && item.debug.length > 0);
+          if (!allItems.length) return null;
+          const enemies = allItems[0].debug!;
+
+          return (
+            <details className="mt-1">
+              <summary className="text-xs text-zinc-700 hover:text-zinc-500 cursor-pointer select-none">
+                debug: item × enemy coverage
+              </summary>
+              <div className="overflow-x-auto mt-2">
+                <table className="text-xs border-collapse">
+                  <thead>
+                    <tr className="text-zinc-700">
+                      <th className="text-left pb-1 pr-4 font-mono font-normal">item</th>
+                      {enemies.map((e) => (
+                        <th key={e.hero_id} className="text-left pb-1 pr-3 font-mono font-normal whitespace-nowrap">
+                          {e.localized_name}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allItems.map((item) => (
+                      <tr key={item.item_id} className="border-t border-zinc-800/40">
+                        <td className="py-0.5 pr-4 text-zinc-500 truncate max-w-[100px]">
+                          {item.display_name}
+                        </td>
+                        {item.debug!.map((e) => (
+                          <td
+                            key={e.hero_id}
+                            className="py-0.5 pr-3 font-mono text-zinc-600 whitespace-nowrap"
+                            title={`${e.wins}W / ${e.games}G — smoothed ${(e.smoothed_wr * 100).toFixed(1)}%`}
+                          >
+                            {e.games}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          );
+        })()}
       </div>
     </div>
   );

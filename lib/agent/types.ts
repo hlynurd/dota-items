@@ -27,13 +27,22 @@ export interface DraftInput {
 
 export type Confidence = "high" | "medium" | "low";
 
+// Per-enemy breakdown included in ItemRecommendation for debugging
+export interface ItemDebugEntry {
+  hero_id: number;
+  localized_name: string;
+  games: number;      // games where hero H bought item I vs this enemy
+  wins: number;       // wins among those games
+  smoothed_wr: number; // after Bayesian smoothing toward pairwise win rate
+}
+
 export interface ItemRecommendation {
   item_id: number;
   item_name: string; // internal name, e.g. "blink"
   display_name: string; // e.g. "Blink Dagger"
-  base_win_rate: number;    // 0–1, general win rate on this hero regardless of matchup
-  matchup_delta: number;    // signed float, e.g. +0.04 means +4% better in this specific matchup
+  win_rate: number;  // 0–1, smoothed win rate vs this specific enemy lineup
   confidence: Confidence;
+  debug?: ItemDebugEntry[]; // per-enemy game counts, omitted in non-debug builds
 }
 
 export interface TimingBucket {
@@ -42,8 +51,7 @@ export interface TimingBucket {
     item_id: number;
     item_name: string;
     display_name: string;
-    base_win_rate: number;
-    matchup_delta: number;
+    win_rate: number; // popularity-rank proxy around hero overall win rate
   }[];
 }
 
@@ -63,6 +71,7 @@ export interface ChatContext {
 
 export interface HeroBuild {
   hero: Hero;
+  matchup_delta: number; // signed float — hero's win rate delta vs this specific enemy lineup
   phases: {
     starting: ItemRecommendation[];
     early: ItemRecommendation[];

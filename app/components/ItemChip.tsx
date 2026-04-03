@@ -7,12 +7,7 @@ interface Props {
 }
 
 export default function ItemChip({ item, size = "md" }: Props) {
-  const deltaPositive = item.matchup_delta >= 0;
-  const deltaColor = deltaPositive ? "text-green-400" : "text-red-400";
-  const deltaSign = deltaPositive ? "+" : "";
-
-  const baseWinPct = (item.base_win_rate * 100).toFixed(1);
-  const deltaPct = (Math.abs(item.matchup_delta) * 100).toFixed(1);
+  const baseWinPct = (item.win_rate * 100).toFixed(1);
 
   const confidenceDot: Record<typeof item.confidence, string> = {
     high: "bg-green-500",
@@ -42,11 +37,8 @@ export default function ItemChip({ item, size = "md" }: Props) {
           </span>
           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${confidenceDot[item.confidence]}`} />
         </div>
-        <div className="flex items-center gap-2 mt-0.5">
-          <span className="text-xs text-zinc-400">{baseWinPct}%</span>
-          <span className={`text-xs font-mono ${deltaColor}`}>
-            {deltaSign}{item.matchup_delta >= 0 ? "" : "-"}{deltaPct}%
-          </span>
+        <div className="mt-0.5">
+          <span className="text-xs text-zinc-400">{baseWinPct}% win rate</span>
         </div>
       </div>
     </div>

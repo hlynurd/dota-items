@@ -38,3 +38,10 @@ export interface OpenDotaMatchup {
   games_played: number;
   wins: number;
 }
+
+// /explorer SQL query result row for item win rate vs a specific enemy
+export interface ExplorerItemRow {
+  item_id: number;
+  games: number; // total games where hero H bought this item vs enemy E
+  wins: number;  // wins among those games
+}
