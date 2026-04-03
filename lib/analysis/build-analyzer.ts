@@ -15,6 +15,8 @@ import type {
   ItemRecommendation,
   TimingBucket,
   Confidence,
+  TeamItemEntry,
+  TeamItemsResult,
 } from "../agent/types";
 
 const SMOOTHING_K = 10; // lower than before (50) — marginal data is ~130x denser
@@ -257,9 +259,59 @@ async function analyzeHero(
   return { hero, matchup_delta: matchupDelta, phases, timing_winrates };
 }
 
+// ─── Team-level item analysis ─────────────────────────────────────────────────
+
+function analyzeTeamItemsFromData(
+  enemies: Hero[],
+  itemsMap: OpenDotaItemsMap,
+  marginalRows: ItemMarginalRow[],
+  baselineRows: ItemBaselineRow[],
+): TeamItemsResult {
+  const enemyIdx = buildMarginalIndex(marginalRows, "enemy", 999);
+  const basIdx = buildBaselineIndex(baselineRows, 999);
+  const componentSet = buildComponentSet(itemsMap);
+
+  // Score every item that has baseline data
+  const entries: TeamItemEntry[] = [];
+  for (const [key, baseline] of basIdx.entries()) {
+    const item_id = parseInt(key);
+    if (baseline.games < 10) continue; // skip very rare items
+
+    const { item_name, display_name } = resolveItem(itemsMap, item_id);
+    if (item_name === "unknown") continue;
+
+    // Check component filter
+    const entry = Object.entries(itemsMap).find(([, item]) => item.id === item_id);
+    if (entry && componentSet.has(entry[0])) continue;
+
+    const baselineWr = baseline.wins / baseline.games;
+    const { score, totalGames, debug } = computeMarginalScore(
+      item_id, enemies, enemyIdx, basIdx, "enemy"
+    );
+
+    entries.push({
+      item_id,
+      item_name,
+      display_name,
+      baseline_wr: Math.round(baselineWr * 1000) / 1000,
+      lineup_wr: score,
+      lift: Math.round((score - baselineWr) * 1000) / 1000,
+      games: enemies.length > 0 ? Math.round(totalGames / enemies.length) : 0,
+      enemy_breakdown: debug,
+    });
+  }
+
+  const byWinrate = [...entries].sort((a, b) => b.lineup_wr - a.lineup_wr).slice(0, 15);
+  const byLift = [...entries].sort((a, b) => b.lift - a.lift).slice(0, 15);
+
+  return { top_by_winrate: byWinrate, top_by_lift: byLift };
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export async function analyzeDraft(draft: DraftInput): Promise<HeroBuild[]> {
+export async function analyzeDraft(
+  draft: DraftInput
+): Promise<{ builds: HeroBuild[]; teamItems: TeamItemsResult | null }> {
   const allHeroes = [...draft.radiant, ...draft.dire];
   const allHeroIds = allHeroes.map((h) => h.id);
 
@@ -270,7 +322,7 @@ export async function analyzeDraft(draft: DraftInput): Promise<HeroBuild[]> {
     getItemBaselines(),
   ]);
 
-  return Promise.all(
+  const builds = await Promise.all(
     allHeroes.map((hero) => {
       const isRadiant = draft.radiant.some((h) => h.id === hero.id);
       const enemies = isRadiant ? draft.dire : draft.radiant;
@@ -278,4 +330,11 @@ export async function analyzeDraft(draft: DraftInput): Promise<HeroBuild[]> {
       return analyzeHero(hero, allies, enemies, itemsMap, marginalRows, baselineRows);
     })
   );
+
+  // Team-level item analysis (use radiant's perspective — enemies = dire)
+  const teamItems = draft.dire.length > 0
+    ? analyzeTeamItemsFromData(draft.dire, itemsMap, marginalRows, baselineRows)
+    : null;
+
+  return { builds, teamItems };
 }

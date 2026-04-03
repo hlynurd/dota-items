@@ -97,6 +97,22 @@ export interface HeroBuild {
   timing_winrates: TimingBucket[];
 }
 
+export interface TeamItemEntry {
+  item_id: number;
+  item_name: string;
+  display_name: string;
+  baseline_wr: number;      // unconditional win rate
+  lineup_wr: number;        // marginal score vs this lineup
+  lift: number;             // lineup_wr - baseline_wr
+  games: number;            // avg games per enemy context
+  enemy_breakdown: MarginalDebugEntry[];
+}
+
+export interface TeamItemsResult {
+  top_by_winrate: TeamItemEntry[];
+  top_by_lift: TeamItemEntry[];
+}
+
 export interface AgentResponse {
   builds: HeroBuild[];
   draft: DraftInput;

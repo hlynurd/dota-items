@@ -48,7 +48,11 @@ export async function POST(req: Request): Promise<Response> {
       try {
         emit({ type: "status", message: "Fetching match data..." });
 
-        const builds = await analyzeDraft(draft);
+        const { builds, teamItems } = await analyzeDraft(draft);
+
+        if (teamItems) {
+          emit({ type: "team_items", data: teamItems });
+        }
 
         for (const build of builds) {
           emit({ type: "hero_build", data: build });

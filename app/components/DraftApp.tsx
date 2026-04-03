@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import type { OpenDotaHero } from "@/lib/opendota/types";
-import type { Hero, HeroBuild, ChatMessage, Position } from "@/lib/agent/types";
+import type { Hero, HeroBuild, ChatMessage, Position, TeamItemsResult } from "@/lib/agent/types";
 import DraftBoard from "./DraftBoard";
 import HeroPicker from "./HeroPicker";
 import ResultsPanel from "./ResultsPanel";
+import TeamItemsCard from "./TeamItemsCard";
 import ChatPanel from "./ChatPanel";
 
 type SlotKey = { side: "radiant" | "dire"; slot: number };
@@ -27,6 +28,7 @@ export default function DraftApp({ heroes }: { heroes: OpenDotaHero[] }) {
   const [dire, setDire] = useState<(Hero | null)[]>(Array(5).fill(null));
   const [picker, setPicker] = useState<SlotKey | null>(null);
   const [builds, setBuilds] = useState<HeroBuild[]>([]);
+  const [teamItems, setTeamItems] = useState<TeamItemsResult | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -82,6 +84,7 @@ export default function DraftApp({ heroes }: { heroes: OpenDotaHero[] }) {
 
     setIsAnalyzing(true);
     setBuilds([]);
+    setTeamItems(null);
     setChatMessages([]);
     setStatusMessage("Starting analysis...");
 
@@ -111,11 +114,13 @@ export default function DraftApp({ heroes }: { heroes: OpenDotaHero[] }) {
           const event = JSON.parse(line) as
             | { type: "status"; message: string }
             | { type: "hero_build"; data: HeroBuild }
+            | { type: "team_items"; data: TeamItemsResult }
             | { type: "done" }
             | { type: "error"; message: string };
 
           if (event.type === "status") setStatusMessage(event.message);
           if (event.type === "hero_build") setBuilds((prev) => [...prev, event.data]);
+          if (event.type === "team_items") setTeamItems(event.data);
           if (event.type === "done") setStatusMessage("");
           if (event.type === "error") setStatusMessage(`Error: ${event.message}`);
         }
@@ -197,6 +202,9 @@ export default function DraftApp({ heroes }: { heroes: OpenDotaHero[] }) {
           onHeroRemove={handleHeroRemove}
           onAnalyze={handleAnalyze}
         />
+
+        {/* Team-level item card */}
+        {teamItems && <TeamItemsCard data={teamItems} />}
 
         {/* Results + Chat side by side once we have data */}
         {(hasResults || isAnalyzing) && (
