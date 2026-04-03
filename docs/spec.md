@@ -2,9 +2,7 @@
 
 ## Core Concept
 
-A 5v5 draft input tool that uses a deterministic data pipeline (OpenDota API + math)
-to recommend items for each hero, broken down by game phase. An optional Claude-powered
-chat panel answers on-demand questions about the builds.
+A 5v5 draft input tool that uses a deterministic data pipeline (own Postgres DB + OpenDota API + Bayesian smoothing) to recommend items for each hero, broken down by game phase. An optional Claude-powered chat panel answers on-demand questions about the builds.
 
 ---
 
@@ -13,116 +11,118 @@ chat panel answers on-demand questions about the builds.
 - Two columns: **Radiant** (left, green) vs **Dire** (right, red)
 - Each column has 5 hero slots
 - **Partial drafts are allowed** — any number of heroes on either side
-- At minimum: at least 1 hero on either team to generate recommendations
 
 ### Hero Selection
 - Searchable autocomplete by hero name (instant, client-side)
-- Alternatively: click a hero from a categorized grid grouped by attribute:
-  - Strength / Agility / Intelligence / Universal
+- Click a hero from a categorized grid grouped by attribute (Strength / Agility / Intelligence / Universal)
 - Hero portraits shown once selected (from Valve CDN)
 
 ### Role Designation
-- **Row index determines position by default**: row 1 = Pos 1 (Carry), row 2 = Pos 2 (Mid), etc.
-- Each filled slot shows a toggle button: `Pos X — Role Label`
-- **Clicking the toggle** marks the hero as **uncertain role** (shown in yellow, position = null)
+- Row index determines position by default: row 1 = Pos 1 (Carry), …, row 5 = Pos 5 (Hard Support)
+- Each slot shows a toggle button: "Pos X — Role Label"
+- Clicking the toggle marks the hero as uncertain role (position = null, shown in yellow)
 - Clicking again restores the row-assigned position
-- When position = null the analysis aggregates across all roles rather than conditioning on one
-
-Position labels:
-- Pos 1 = Carry
-- Pos 2 = Mid
-- Pos 3 = Offlane
-- Pos 4 = Soft Support
-- Pos 5 = Hard Support
 
 ---
 
 ## Output: Item Recommendations
 
-### Layout
-- One card per hero on both teams
-- Each card shows: hero portrait, name, position label (if set), item build by phase
+### Item Phases (3 phases — starting items not shown)
 
-### Item Timeline
-Broken into 4 game phases:
-
-| Phase | Timing | Examples |
+| Phase | OpenDota bucket | Examples |
 |---|---|---|
-| Starting Items | min 0 | Tango, Faerie Fire, Branches, Quelling Blade |
-| Early Game | min 5–15 | Boots, Magic Wand, Bracers, Null Talismans |
-| Core Items | min 15–30 | Power Treads, Blink Dagger, BKB, key damage items |
-| Situational / Late | min 30+ | Luxury items, late counters |
+| Early Game | early_game_items | Boots, Magic Wand, Wraith Band |
+| Core Items | mid_game_items | Power Treads, Blink Dagger, BKB |
+| Situational / Late | late_game_items | Luxury items, late counters |
+
+Only **completed items** shown — component items (Void Stone, Chainmail, etc.) filtered out via the component graph in OpenDota's item constants.
+
+Items are ranked by matchup-adjusted win rate (not popularity).
 
 ### Per-Item Display
-- Item icon (Valve CDN)
-- Item name
-- **Base win rate** — hero's overall win rate ± popularity rank bonus (±3%)
-- **Matchup delta** — `avg win rate vs these specific enemies − overall win rate`, signed and color-coded (`+4.2%` green / `-1.8%` red)
-- **Confidence dot** — green = top-3 by purchase count, yellow = top-7, grey = lower
+- Item icon + name + confidence dot (green=high ≥100 games/enemy, yellow=medium ≥25, dark=low)
+- **win_rate** — Bayesian-smoothed win rate vs this specific enemy lineup
+- **diff** — win_rate − overall_win_rate, signed and color-coded
+
+### Hero Card Header
+- Hero portrait + name + position label
+- **matchup_delta** — hero's avg win rate vs this lineup minus overall win rate (shown once, not per-item)
 
 ### Win Rate Timeline
-Below the build: **"Win Rate by Minute"** table
-- Buckets: min 5 / 10 / 20 / 30 / 40 / 50
-- Top 3 items per bucket, each showing base win rate + matchup delta
-- Phase → bucket mapping: starting→5, early→10&20, mid→30&40, late→50
+- Buckets: 10 / 20 / 30 / 40 / 50 minutes
+- Top 3 completed items per bucket, real win rates from DB
+
+### Debug Section
+- Collapsed `<details>` at bottom of each card
+- Table: items × each enemy, game count per cell (hover for wins/games/smoothed%)
+- Sections: "phase items" and "timing items"
 
 ---
 
-## Analysis Pipeline (deterministic, no LLM)
+## Analysis Pipeline
 
-All heroes are analyzed **in parallel** via `lib/analysis/build-analyzer.ts`:
+`lib/analysis/build-analyzer.ts`, all heroes in parallel:
 
-1. Fetch `GET /heroes/{id}/itemPopularity` — purchase counts by phase
-2. Fetch `GET /heroes/{id}/matchups` — win rates vs every other hero
-3. Compute `overall_win_rate` = totalWins / totalGames across all matchups
-4. Compute `matchup_delta` = avgWinRateVsTheseEnemies − overallWinRate
-5. Rank items by purchase count per phase
-6. Assign `base_win_rate` = overallWinRate + rankBonus (top item +3%, last item −3%)
-
-Total time: ~1 second for a full 10-hero draft.
-
----
-
-## Chat Window
-
-A persistent chat panel visible after analysis runs.
-
-- User can ask: *"Why is BKB recommended here?"*, *"What counters Axe?"*, etc.
-- Claude has full context: current draft, both teams, all builds, win rate data
-- Responses stream in real time
-- Claude can also call live data tools (item popularity, matchup win rates) if needed
-- Chat history is session-only (no persistence across page reloads)
-- API route: `POST /api/chat` — accepts `{ messages: ChatMessage[], context: ChatContext }`
-- Model: `claude-sonnet-4-6`, max_tokens: 8192
+1. Fetch `itemPopularity` + `matchups` from OpenDota (1hr cached)
+2. Single DB query per hero: all `item_win_rates` rows for this hero × these enemies
+3. Build overallByItem (opponent=-1) and vsEnemyByItem maps per timing bucket
+4. **Bayesian smoothing** K=50 per item × per enemy:
+   `smoothed_wr = (wins_vs_enemy + 50 × pairwise_wr) / (games_vs_enemy + 50)`
+5. Lineup score = mean smoothed_wr across 5 enemies
+6. Phase items: all candidates scored, sorted, top 6 kept
+7. Timing buckets use per-bucket win rates from DB
 
 ---
 
-## Data Source: OpenDota API
+## Data Pipeline
 
-Base URL: `https://api.opendota.com/api`
+### Ingest (hourly at :00 via Vercel Cron → /api/cron/ingest)
+- Pages through OpenDota `/parsedMatches` (purchase_log attached)
+- Filter: game_mode=22, avg_rank_tier ≥ 70 (Ancient+)
+- **Note**: Divine+ (rank ≥80) unavailable via free API — players have private profiles
+- Parses purchase_log, skips components, inserts matches + item_timings
+- Prunes rows older than 7 days
 
-Key endpoints used:
-- `GET /heroes` — full hero list (fetched server-side on page load, cached 1hr)
-- `GET /constants/items` — item details and display names (cached 1hr)
-- `GET /heroes/{hero_id}/itemPopularity` — item purchase counts by phase (cached 1hr)
-- `GET /heroes/{hero_id}/matchups` — per-hero matchup win rates (cached 1hr)
-
-No API key required. Rate limit: 60 req/min on free tier (mitigated by Next.js fetch cache).
+### Aggregate (hourly at :30 via Vercel Cron → /api/cron/aggregate)
+- Joins item_timings + matches, derives opponent heroes
+- Accumulates (hero, item, opponent, before_minute) → games/wins
+- opponent_hero_id = -1 means overall baseline
+- before_minute buckets: 10, 20, 30, 40, 50, 999 (any time)
+- Full upsert into item_win_rates
 
 ---
 
-## Aesthetic
+## DB Schema
 
-- Always-dark theme (zinc-950 base, matches Dota 2 native UI)
-- Green for Radiant, Red for Dire
-- Valve CDN for images:
-  - Heroes: `https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/{name}.png`
-  - Items: `https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/{name}.png`
+```
+matches        (match_id PK, start_time, radiant_win, avg_rank_tier, radiant_0..4, dire_0..4)
+item_timings   (match_id, hero_id, item_id, time_s, won) PK: all three ids
+item_win_rates (hero_id, item_id, opponent_hero_id, before_minute, games, wins) PK: all four
+```
+
+Hosted on Neon (serverless Postgres). Accessed via Drizzle ORM.
+
+---
+
+## Rate Limiting
+
+`/api/analyze`: 5 requests per IP per 60 seconds (in-memory sliding window).
+
+---
+
+## Chat
+
+- POST /api/chat — Claude Sonnet, streams plain text
+- Has full draft + build context
+- Session-only history (no persistence)
+
+### Future: LLM Explanation Layer
+Pass enemy hero attributes to Claude when surfacing specific items (e.g. BKB → explain disable-heavy lineup). Trigger on-demand.
 
 ---
 
 ## Deployment
 
-- Hosted on Vercel (free tier)
-- GitHub repo: hlynurd/dota-items
-- Required env var: `ANTHROPIC_API_KEY` (chat only — analyze route uses no API credits)
+- Vercel, auto-deploys on push to main (hlynurd/dota-items)
+- Crons: ingest :00, aggregate :30 — both require CRON_SECRET Bearer auth
+- Env vars: ANTHROPIC_API_KEY, DATABASE_URL, CRON_SECRET
