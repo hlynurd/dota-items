@@ -1,4 +1,4 @@
-import { analyzeStream } from "@/lib/agent";
+import { analyzeDraft } from "@/lib/analysis/build-analyzer";
 import type { DraftInput } from "@/lib/agent/types";
 
 export const dynamic = "force-dynamic";
@@ -16,18 +16,24 @@ export async function POST(req: Request): Promise<Response> {
 
   const encoder = new TextEncoder();
 
-  // Stream newline-delimited JSON (NDJSON) — one event per line
   const stream = new ReadableStream({
     async start(controller) {
+      const emit = (obj: unknown) =>
+        controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+
       try {
-        for await (const event of analyzeStream(draft)) {
-          controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
+        emit({ type: "status", message: "Fetching match data..." });
+
+        const builds = await analyzeDraft(draft);
+
+        for (const build of builds) {
+          emit({ type: "hero_build", data: build });
         }
+
+        emit({ type: "done" });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
-        controller.enqueue(
-          encoder.encode(JSON.stringify({ type: "error", message }) + "\n")
-        );
+        emit({ type: "error", message });
       } finally {
         controller.close();
       }
@@ -38,7 +44,7 @@ export async function POST(req: Request): Promise<Response> {
     headers: {
       "Content-Type": "application/x-ndjson",
       "Cache-Control": "no-cache",
-      "X-Accel-Buffering": "no", // disable Nginx buffering on Vercel
+      "X-Accel-Buffering": "no",
     },
   });
 }
