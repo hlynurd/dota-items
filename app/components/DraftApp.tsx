@@ -40,23 +40,30 @@ export default function DraftApp({ heroes }: { heroes: OpenDotaHero[] }) {
 
   function handleHeroSelect(hero: OpenDotaHero) {
     if (!picker) return;
-    const newHero = toHero(hero);
+    // Row index determines position by default (row 0 = pos 1, etc.)
+    const newHero = toHero(hero, (picker.slot + 1) as Position);
     if (picker.side === "radiant") {
       setRadiant((prev) => prev.map((h, i) => (i === picker.slot ? newHero : h)));
     } else {
       setDire((prev) => prev.map((h, i) => (i === picker.slot ? newHero : h)));
     }
     setPicker(null);
-    // Clear results when draft changes
     setBuilds([]);
     setChatMessages([]);
   }
 
-  function handlePositionChange(side: "radiant" | "dire", slot: number, pos: Position | null) {
+  // Toggle between row-assigned position and null (uncertain)
+  function handleUncertainToggle(side: "radiant" | "dire", slot: number) {
+    const rowPosition = (slot + 1) as Position;
     const update = (prev: (Hero | null)[]) =>
-      prev.map((h, i) => (i === slot && h ? { ...h, position: pos } : h));
+      prev.map((h, i) => {
+        if (i !== slot || !h) return h;
+        return { ...h, position: h.position === null ? rowPosition : null };
+      });
     if (side === "radiant") setRadiant(update);
     else setDire(update);
+    setBuilds([]);
+    setChatMessages([]);
   }
 
   function handleHeroRemove(side: "radiant" | "dire", slot: number) {
@@ -186,7 +193,7 @@ export default function DraftApp({ heroes }: { heroes: OpenDotaHero[] }) {
           isAnalyzing={isAnalyzing}
           statusMessage={statusMessage}
           onOpenPicker={openPicker}
-          onPositionChange={handlePositionChange}
+          onUncertainToggle={handleUncertainToggle}
           onHeroRemove={handleHeroRemove}
           onAnalyze={handleAnalyze}
         />

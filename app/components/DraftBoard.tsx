@@ -1,4 +1,4 @@
-import type { Hero, Position } from "@/lib/agent/types";
+import type { Hero } from "@/lib/agent/types";
 import HeroSlot from "./HeroSlot";
 
 interface Props {
@@ -7,7 +7,7 @@ interface Props {
   isAnalyzing: boolean;
   statusMessage: string;
   onOpenPicker: (side: "radiant" | "dire", slot: number) => void;
-  onPositionChange: (side: "radiant" | "dire", slot: number, pos: Position | null) => void;
+  onUncertainToggle: (side: "radiant" | "dire", slot: number) => void;
   onHeroRemove: (side: "radiant" | "dire", slot: number) => void;
   onAnalyze: () => void;
 }
@@ -18,7 +18,7 @@ export default function DraftBoard({
   isAnalyzing,
   statusMessage,
   onOpenPicker,
-  onPositionChange,
+  onUncertainToggle,
   onHeroRemove,
   onAnalyze,
 }: Props) {
@@ -39,9 +39,10 @@ export default function DraftBoard({
             <HeroSlot
               key={i}
               hero={hero}
+              slot={i}
               side="radiant"
               onOpenPicker={() => onOpenPicker("radiant", i)}
-              onPositionChange={(pos) => onPositionChange("radiant", i, pos)}
+              onUncertainToggle={() => onUncertainToggle("radiant", i)}
               onRemove={() => onHeroRemove("radiant", i)}
             />
           ))}
@@ -59,9 +60,10 @@ export default function DraftBoard({
             <HeroSlot
               key={i}
               hero={hero}
+              slot={i}
               side="dire"
               onOpenPicker={() => onOpenPicker("dire", i)}
-              onPositionChange={(pos) => onPositionChange("dire", i, pos)}
+              onUncertainToggle={() => onUncertainToggle("dire", i)}
               onRemove={() => onHeroRemove("dire", i)}
             />
           ))}
