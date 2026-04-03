@@ -12,9 +12,8 @@
  * before_minute buckets: 10, 20, 30, 40, 50, 999 (999 = any time / item purchased at all)
  */
 
-if (typeof window === "undefined" && process.argv[1]?.endsWith("aggregate.ts")) {
-  await import("dotenv/config");
-}
+import { config } from "dotenv";
+config({ path: ".env.local" });
 import { db } from "../lib/db/client";
 import { matches, item_timings, item_win_rates } from "../lib/db/schema";
 import { eq, sql } from "drizzle-orm";
