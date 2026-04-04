@@ -1,8 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import type { OpenDotaHero } from "@/lib/opendota/types";
 import type { HeroLookupResult, ItemLookupResult } from "@/lib/agent/types";
+import {
+  type StaticData, type IndexedData,
+  indexStaticData, computeHeroLookup, computeItemLookup,
+} from "@/lib/analysis/client-compute";
 import HeroPicker from "./HeroPicker";
 import ItemPicker, { type ItemOption } from "./ItemPicker";
 import HeroItemTable from "./HeroItemTable";
@@ -17,83 +21,100 @@ interface SelectedHero {
   localized_name: string;
 }
 
-export default function DraftApp({ heroes, items }: { heroes: OpenDotaHero[]; items: ItemOption[] }) {
+export default function DraftApp({
+  heroes, items, staticData,
+}: {
+  heroes: OpenDotaHero[];
+  items: ItemOption[];
+  staticData: StaticData | null;
+}) {
+  // Index static data once
+  const indexed = useMemo<IndexedData | null>(
+    () => staticData ? indexStaticData(staticData) : null,
+    [staticData]
+  );
+
+  // Lookup maps for resolving IDs to names
+  const itemsById = useMemo(() => {
+    const m = new Map<number, { name: string; dname: string }>();
+    for (const item of items) m.set(item.id, { name: item.name, dname: item.dname });
+    return m;
+  }, [items]);
+
+  const heroesById = useMemo(() => {
+    const m = new Map<number, { localized_name: string; name: string }>();
+    for (const h of heroes) m.set(h.id, { localized_name: h.localized_name, name: h.name });
+    return m;
+  }, [heroes]);
+
   // Hero quadrants
   const [friendHero, setFriendHero] = useState<SelectedHero | null>(null);
   const [foeHero, setFoeHero] = useState<SelectedHero | null>(null);
-  const [friendHeroResult, setFriendHeroResult] = useState<HeroLookupResult | null>(null);
-  const [foeHeroResult, setFoeHeroResult] = useState<HeroLookupResult | null>(null);
-  const [heroLoading, setHeroLoading] = useState<Side | null>(null);
   const [heroPicker, setHeroPicker] = useState<Side | null>(null);
 
   // Item quadrants
   const [friendItem, setFriendItem] = useState<ItemOption | null>(null);
   const [foeItem, setFoeItem] = useState<ItemOption | null>(null);
-  const [friendItemResult, setFriendItemResult] = useState<ItemLookupResult | null>(null);
-  const [foeItemResult, setFoeItemResult] = useState<ItemLookupResult | null>(null);
-  const [itemLoading, setItemLoading] = useState<Side | null>(null);
   const [itemPicker, setItemPicker] = useState<Side | null>(null);
 
   const selectedHeroIds = new Set(
     [friendHero, foeHero].filter(Boolean).map((h) => h!.id)
   );
 
-  // ─── Handlers ──────────────────────────────────────────────────────────────
+  // Build a set of excluded item IDs by finding items in the static data that
+  // are NOT in our filtered items list (which already excludes consumables)
+  const filteredItemIds = useMemo(() => new Set(items.map((i) => i.id)), [items]);
 
-  async function handleHeroSelect(hero: OpenDotaHero) {
+  // ─── Computed results (instant, no API calls) ─────────────────────────────
+
+  const friendHeroResult = useMemo<HeroLookupResult | null>(() => {
+    if (!indexed || !friendHero) return null;
+    return computeHeroLookup(indexed, friendHero.id, friendHero.localized_name, "ally", itemsById, filteredItemIds);
+  }, [indexed, friendHero, itemsById, filteredItemIds]);
+
+  const foeHeroResult = useMemo<HeroLookupResult | null>(() => {
+    if (!indexed || !foeHero) return null;
+    return computeHeroLookup(indexed, foeHero.id, foeHero.localized_name, "enemy", itemsById, filteredItemIds);
+  }, [indexed, foeHero, itemsById, filteredItemIds]);
+
+  const friendItemResult = useMemo<ItemLookupResult | null>(() => {
+    if (!indexed || !friendItem) return null;
+    return computeItemLookup(indexed, friendItem.id, friendItem.name, friendItem.dname, "ally", heroesById);
+  }, [indexed, friendItem, heroesById]);
+
+  const foeItemResult = useMemo<ItemLookupResult | null>(() => {
+    if (!indexed || !foeItem) return null;
+    return computeItemLookup(indexed, foeItem.id, foeItem.name, foeItem.dname, "enemy", heroesById);
+  }, [indexed, foeItem, heroesById]);
+
+  // ─── Handlers ─────────────────────────────────────────────────────────────
+
+  function handleHeroSelect(hero: OpenDotaHero) {
     if (!heroPicker) return;
     const selected: SelectedHero = { id: hero.id, name: hero.name, localized_name: hero.localized_name };
-    const side = heroPicker;
-    const dbSide = side === "friend" ? "ally" : "enemy";
-
-    if (side === "friend") { setFriendHero(selected); setFriendHeroResult(null); }
-    else { setFoeHero(selected); setFoeHeroResult(null); }
+    if (heroPicker === "friend") setFriendHero(selected);
+    else setFoeHero(selected);
     setHeroPicker(null);
-    setHeroLoading(side);
-
-    try {
-      const params = new URLSearchParams({ hero_id: String(hero.id), hero_name: hero.localized_name, side: dbSide });
-      const res = await fetch(`/api/hero-lookup?${params}`);
-      const data: HeroLookupResult = await res.json();
-      if (side === "friend") setFriendHeroResult(data);
-      else setFoeHeroResult(data);
-    } finally {
-      setHeroLoading(null);
-    }
   }
 
-  async function handleItemSelect(item: ItemOption) {
+  function handleItemSelect(item: ItemOption) {
     if (!itemPicker) return;
-    const side = itemPicker;
-    const dbSide = side === "friend" ? "ally" : "enemy";
-
-    if (side === "friend") { setFriendItem(item); setFriendItemResult(null); }
-    else { setFoeItem(item); setFoeItemResult(null); }
+    if (itemPicker === "friend") setFriendItem(item);
+    else setFoeItem(item);
     setItemPicker(null);
-    setItemLoading(side);
-
-    try {
-      const params = new URLSearchParams({ item_id: String(item.id), item_name: item.name, display_name: item.dname, side: dbSide });
-      const res = await fetch(`/api/item-lookup?${params}`);
-      const data: ItemLookupResult = await res.json();
-      if (side === "friend") setFriendItemResult(data);
-      else setFoeItemResult(data);
-    } finally {
-      setItemLoading(null);
-    }
   }
 
   function clearHero(side: Side) {
-    if (side === "friend") { setFriendHero(null); setFriendHeroResult(null); }
-    else { setFoeHero(null); setFoeHeroResult(null); }
+    if (side === "friend") setFriendHero(null);
+    else setFoeHero(null);
   }
 
   function clearItem(side: Side) {
-    if (side === "friend") { setFriendItem(null); setFriendItemResult(null); }
-    else { setFoeItem(null); setFoeItemResult(null); }
+    if (side === "friend") setFriendItem(null);
+    else setFoeItem(null);
   }
 
-  // ─── Card shell ────────────────────────────────────────────────────────────
+  // ─── Card shell ───────────────────────────────────────────────────────────
 
   function QuadrantCard({ side, children, header }: {
     side: Side; header: React.ReactNode; children: React.ReactNode;
@@ -107,9 +128,9 @@ export default function DraftApp({ heroes, items }: { heroes: OpenDotaHero[]; it
     );
   }
 
-  // ─── Picker buttons ────────────────────────────────────────────────────────
+  // ─── Picker buttons ───────────────────────────────────────────────────────
 
-  function HeroPickerButton({ side, hero, loading }: { side: Side; hero: SelectedHero | null; loading: boolean }) {
+  function HeroPickerButton({ side, hero }: { side: Side; hero: SelectedHero | null }) {
     const accent = side === "friend" ? "text-green-400" : "text-red-400";
     const subtitle = side === "friend" ? "Items teammates buy more" : "Items bought more against";
 
@@ -127,7 +148,6 @@ export default function DraftApp({ heroes, items }: { heroes: OpenDotaHero[]; it
               <span className="text-sm font-medium text-zinc-200 truncate block">{hero.localized_name}</span>
               <span className="text-[10px] text-zinc-600">{subtitle}</span>
             </div>
-            {loading && <span className="text-xs text-zinc-500 animate-pulse shrink-0">Loading...</span>}
             <button onClick={() => clearHero(side)} className="shrink-0 text-zinc-600 hover:text-zinc-300 text-lg leading-none">×</button>
           </>
         ) : (
@@ -140,7 +160,7 @@ export default function DraftApp({ heroes, items }: { heroes: OpenDotaHero[]; it
     );
   }
 
-  function ItemPickerButton({ side, item, loading }: { side: Side; item: ItemOption | null; loading: boolean }) {
+  function ItemPickerButton({ side, item }: { side: Side; item: ItemOption | null }) {
     const accent = side === "friend" ? "text-green-400" : "text-red-400";
     const subtitle = side === "friend" ? "Heroes whose teams buy this more" : "Enemy heroes this is bought against";
 
@@ -158,7 +178,6 @@ export default function DraftApp({ heroes, items }: { heroes: OpenDotaHero[]; it
               <span className="text-sm font-medium text-zinc-200 truncate block">{item.dname}</span>
               <span className="text-[10px] text-zinc-600">{subtitle}</span>
             </div>
-            {loading && <span className="text-xs text-zinc-500 animate-pulse shrink-0">Loading...</span>}
             <button onClick={() => clearItem(side)} className="shrink-0 text-zinc-600 hover:text-zinc-300 text-lg leading-none">×</button>
           </>
         ) : (
@@ -171,7 +190,7 @@ export default function DraftApp({ heroes, items }: { heroes: OpenDotaHero[]; it
     );
   }
 
-  // ─── Render ────────────────────────────────────────────────────────────────
+  // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -204,20 +223,17 @@ export default function DraftApp({ heroes, items }: { heroes: OpenDotaHero[]; it
           <div className="flex-1 h-px bg-zinc-800" />
         </div>
 
-        {/* Hero row */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Hero Friend */}
           <QuadrantCard side="friend"
-            header={<HeroPickerButton side="friend" hero={friendHero} loading={heroLoading === "friend"} />}>
+            header={<HeroPickerButton side="friend" hero={friendHero} />}>
             {friendHeroResult ? <HeroItemTable data={friendHeroResult} /> :
               <div className="flex-1 flex items-center justify-center p-8">
                 <p className="text-sm text-zinc-600">Pick a hero to see what items their teammates buy</p>
               </div>}
           </QuadrantCard>
 
-          {/* Hero Foe */}
           <QuadrantCard side="foe"
-            header={<HeroPickerButton side="foe" hero={foeHero} loading={heroLoading === "foe"} />}>
+            header={<HeroPickerButton side="foe" hero={foeHero} />}>
             {foeHeroResult ? <HeroItemTable data={foeHeroResult} /> :
               <div className="flex-1 flex items-center justify-center p-8">
                 <p className="text-sm text-zinc-600">Pick a hero to see what items are bought against them</p>
@@ -231,20 +247,17 @@ export default function DraftApp({ heroes, items }: { heroes: OpenDotaHero[]; it
           <div className="flex-1 h-px bg-zinc-800" />
         </div>
 
-        {/* Item row */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Item Friend */}
           <QuadrantCard side="friend"
-            header={<ItemPickerButton side="friend" item={friendItem} loading={itemLoading === "friend"} />}>
+            header={<ItemPickerButton side="friend" item={friendItem} />}>
             {friendItemResult ? <ItemHeroTable data={friendItemResult} /> :
               <div className="flex-1 flex items-center justify-center p-8">
                 <p className="text-sm text-zinc-600">Pick an item to see which ally heroes correlate with it</p>
               </div>}
           </QuadrantCard>
 
-          {/* Item Foe */}
           <QuadrantCard side="foe"
-            header={<ItemPickerButton side="foe" item={foeItem} loading={itemLoading === "foe"} />}>
+            header={<ItemPickerButton side="foe" item={foeItem} />}>
             {foeItemResult ? <ItemHeroTable data={foeItemResult} /> :
               <div className="flex-1 flex items-center justify-center p-8">
                 <p className="text-sm text-zinc-600">Pick an item to see which enemy heroes it&apos;s bought against</p>
@@ -253,7 +266,6 @@ export default function DraftApp({ heroes, items }: { heroes: OpenDotaHero[]; it
         </div>
       </main>
 
-      {/* Modals */}
       {heroPicker && (
         <HeroPicker heroes={heroes} excludeIds={selectedHeroIds}
           onSelect={handleHeroSelect} onClose={() => setHeroPicker(null)} />

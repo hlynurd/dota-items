@@ -10,6 +10,8 @@
 
 import { config } from "dotenv";
 config({ path: ".env.local" });
+import { writeFileSync } from "fs";
+import { join } from "path";
 import { db } from "../lib/db/client";
 import { getShards } from "../lib/db/shards";
 import { item_marginal_win_rates, item_baseline_win_rates, context_hero_totals } from "../lib/db/schema";
@@ -319,6 +321,25 @@ export async function runMarginalAggregate(): Promise<{ marginal_rows: number; b
     });
   }
   console.log(`[marginal] Hero totals written: ${totalEntries.length}`);
+
+  // 4. Export static JSON for frontend (only before_minute=999 match-level data)
+  const jsonMarginals: [number, number, string, number, number][] = []; // [item_id, context_hero_id, side, match_games, match_wins]
+  for (const [key, { games, wins }] of marginal) {
+    const parts = key.split(":");
+    if (Number(parts[3]) !== 999) continue;
+    const ml = matchLevel.get(key) ?? { match_games: 0, match_wins: 0 };
+    if (ml.match_games < 5) continue; // pre-filter to reduce size
+    jsonMarginals.push([Number(parts[0]), Number(parts[1]), parts[2], ml.match_games, ml.match_wins]);
+  }
+  const jsonTotals: [number, string, number, number][] = []; // [context_hero_id, side, total_matches, total_wins]
+  for (const [key, { total_matches, total_wins }] of heroTotals) {
+    const [hero_id, side] = key.split(":");
+    jsonTotals.push([Number(hero_id), side, total_matches, total_wins]);
+  }
+  const staticData = { m: jsonMarginals, t: jsonTotals, ts: Date.now() };
+  const jsonPath = join(process.cwd(), "public", "data.json");
+  writeFileSync(jsonPath, JSON.stringify(staticData));
+  console.log(`[marginal] Static JSON: ${jsonMarginals.length} marginals, ${jsonTotals.length} totals → ${jsonPath} (${Math.round(JSON.stringify(staticData).length / 1024)} KB)`);
 
   console.log(`[marginal] Done. Marginal: ${marginal_rows}, baseline: ${baseline_rows}`);
   return { marginal_rows, baseline_rows };
