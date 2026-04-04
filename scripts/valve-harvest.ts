@@ -41,16 +41,11 @@ const EXCLUDED_ITEM_IDS = new Set([
   237,  // Faerie Fire
 ]);
 
-// Leaf components (cheap intermediates < 2000g, not full items)
-const COMPONENT_IDS = new Set([
-  1,2,3,4,5,6,7,8,9,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,
-  31,32,34,36,37,42,43,47,51,52,53,54,55,56,57,58,59,60,61,67,69,79,86,88,92,
-  94,105,125,173,180,181,185,190,214,215,236,240,244,261,279,473,485,593,
-  1122,1128,1575,1802,1847,1848,1849,1872,4204,4205,
-]);
+// No component filter needed — Valve API returns end-game items which are
+// naturally finished items. The excluded consumables list above is sufficient.
 
 function isRelevantItem(id: number): boolean {
-  return id !== 0 && !EXCLUDED_ITEM_IDS.has(id) && !COMPONENT_IDS.has(id);
+  return !EXCLUDED_ITEM_IDS.has(id);
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
