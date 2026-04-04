@@ -7,9 +7,10 @@ A web app for exploring Dota 2 itemization data through team-level marginal stat
 ## Stack
 
 - **Framework**: Next.js 16 (App Router), TypeScript, Tailwind CSS
-- **Analysis**: Deterministic pipeline — own Postgres DB + OpenDota matchup data + Bayesian smoothing
-- **Database**: Neon (serverless Postgres) via Drizzle ORM, multi-DB sharding
-- **Dota data**: OpenDota API (free, no key required; optional OPENDOTA_API_KEY for higher rate limits)
+- **Analysis**: Deterministic pipeline — Valve Steam API bulk data + streaming in-memory aggregation
+- **Dota data**: Valve Steam Web API (`GetMatchHistoryBySequenceNum`) — free, 100 matches/call, end-game items
+- **Database**: Neon (serverless Postgres) via Drizzle ORM — legacy, no longer needed for primary data path
+- **Static data**: `public/data.json` — pre-computed marginal stats, served to client, computed client-side
 - **Testing**: Vitest
 - **Deployment**: Vercel (connected to GitHub repo: hlynurd/dota-items)
 
@@ -65,9 +66,10 @@ lib/
     cdn.ts                    # Valve CDN URL helpers for hero/item images
     excluded-items.ts         # Consumable/ward item names excluded from all analyses
 scripts/
-  ingest.ts                   # Fetch parsedMatches → insert to shard DB (all ranks, no time pruning)
-  aggregate.ts                # Read all shards → compute marginal/baseline/hero totals → write to primary (truncates first)
-  setup-shard.ts              # Provision raw tables (matches, item_timings) on a new Neon shard
+  valve-harvest.ts             # PRIMARY: Valve Steam API bulk harvester — streaming aggregation, writes data.json directly
+  ingest.ts                   # Legacy: OpenDota ingest → shard DB
+  aggregate.ts                # Legacy: Read shards → compute marginals → write to primary DB + data.json
+  setup-shard.ts              # Legacy: Provision raw tables on a new Neon shard
 tests/
   item-coverage.test.ts       # Vitest tests for item filtering/coverage
 docs/
@@ -141,22 +143,24 @@ Analysis uses **team-level marginal statistics** — not hero-specific. The ques
 
 ## Data Pipeline
 
-**ingest.ts** (runs hourly at :00):
-- Pages through `/parsedMatches` from OpenDota (has purchase_log pre-attached)
-- All ranks included (no rank filter), no time-based pruning
-- Writes to the least-full shard; checks all shards for duplicate match_ids
-- Parses purchase_log, skips component items, inserts into matches + item_timings
+### Primary: Valve Steam API Harvester (`scripts/valve-harvest.ts`)
 
-**aggregate.ts** (runs hourly at :30, 30 min after ingest):
-- **Truncates** aggregate tables first to prevent stale data
-- Reads all shards (paginated in 2000-match chunks to stay within Neon 67MB response limit)
-- Tracks items per side using absolute radiant/dire with `radiantItems`/`direItems` Maps
-- Ally counts exclude the buyer (only non-buying teammates counted)
-- before_minute buckets: 10, 20, 30, 40, 50, 999 (999 = any time = broadest sample)
-- Computes context_hero_totals (total matches per enemy/ally hero)
-- Inserts into primary DB
+Streaming aggregation — fetches matches from Valve's API, accumulates counters in memory, writes `data.json` directly. **No database needed.**
 
-**Page refresh** triggers background aggregate via `after()`.
+- Calls `GetMatchHistoryBySequenceNum` (100 matches/call, free)
+- Filters to ranked All Pick (`game_mode=22`, `lobby_type=7`, 10 humans, duration >= 10 min)
+- Uses end-game item slots (`item_0..item_5`) — no purchase timing
+- Accumulates per-(item, hero, side) match-level win rates in memory
+- Ally counts exclude the buyer (same as aggregate.ts)
+- Writes `public/data.json` at end + checkpoints every 50K matches
+- Rate: ~20 calls/min, ~100K ranked matches/hour
+- Run: `npm run valve-harvest` or `npm run valve-harvest -- --max 1000000`
+
+### Legacy: OpenDota Pipeline
+
+Still present but no longer the primary data source:
+- `scripts/ingest.ts` — OpenDota API ingest to Neon shard DB
+- `scripts/aggregate.ts` — reads shards, writes to primary DB + data.json
 
 ## Excluded Items
 
@@ -181,11 +185,12 @@ Items kept: Gem, Dust, Faerie Fire, Blood Grenade.
 ## Environment Variables
 
 ```
+STEAM_API_KEY=       # Valve Steam Web API key (free, required for valve-harvest)
 ANTHROPIC_API_KEY=   # Claude API key (chat only)
-DATABASE_URL=        # Neon Postgres connection string (primary — aggregates)
-SHARD_URLS=          # Optional, comma-separated shard connection strings (raw data)
+DATABASE_URL=        # Neon Postgres connection string (legacy — aggregates)
+SHARD_URLS=          # Optional, comma-separated shard connection strings (legacy)
 CRON_SECRET=         # Shared secret for Vercel Cron auth (Bearer token)
-OPENDOTA_API_KEY=    # Optional, for higher OpenDota rate limits
+OPENDOTA_API_KEY=    # Optional, for higher OpenDota rate limits (legacy)
 ```
 
 ## npm Scripts
@@ -193,13 +198,10 @@ OPENDOTA_API_KEY=    # Optional, for higher OpenDota rate limits
 ```
 npm run dev          # Local dev server
 npm run build        # Production build
-npm run ingest       # Run ingest script manually (reads .env.local)
-npm run backfill     # Bulk all-rank ingest mode
-npm run aggregate    # Recompute marginals from all shards
-npm run setup-shard  # Provision raw tables on a new Neon shard (pass URL as arg)
+npm run valve-harvest  # PRIMARY: Valve API bulk harvest → data.json (default 500K matches)
+npm run ingest       # Legacy: OpenDota ingest
+npm run aggregate    # Legacy: recompute marginals from DB shards
 npm test             # Run vitest tests
-npm run db:push      # Push schema to Neon (run after schema changes)
-npm run db:generate  # Generate Drizzle migration files
 ```
 
 ## What NOT to Do

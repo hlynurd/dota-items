@@ -14,6 +14,7 @@
     "ingest": "tsx scripts/ingest.ts",
     "backfill": "tsx scripts/ingest.ts --backfill",
     "aggregate": "tsx scripts/aggregate.ts",
+    "valve-harvest": "tsx scripts/valve-harvest.ts",
     "setup-shard": "tsx scripts/setup-shard.ts"
   },
   "dependencies": {
