@@ -5,7 +5,7 @@
 
 import type { HeroLookupResult, HeroItemEntry, ItemLookupResult, ItemHeroEntry } from "../agent/types";
 import type { ItemOption } from "../../app/components/ItemPicker";
-import { EXCLUDED_ITEM_NAMES } from "../utils/excluded-items";
+
 
 // ─── Static data shape (compact tuples from aggregate) ──────────────────────
 

@@ -2,7 +2,7 @@ import { getHeroes, getItemsMap } from "@/lib/opendota/client";
 import type { OpenDotaHero } from "@/lib/opendota/types";
 import type { ItemOption } from "./components/ItemPicker";
 import type { StaticData } from "@/lib/analysis/client-compute";
-import { EXCLUDED_ITEM_NAMES } from "@/lib/utils/excluded-items";
+import { isExcludedItem } from "@/lib/utils/excluded-items";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import DraftApp from "./components/DraftApp";
@@ -32,7 +32,7 @@ export default async function Page() {
     }
 
     items = Object.entries(itemsMap)
-      .filter(([name, item]) => item.cost > 0 && item.dname && itemIdsWithData.has(item.id) && !EXCLUDED_ITEM_NAMES.has(name))
+      .filter(([name, item]) => item.cost > 0 && item.dname && itemIdsWithData.has(item.id) && !isExcludedItem(name))
       .map(([name, item]) => ({
         id: item.id,
         name,

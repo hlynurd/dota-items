@@ -2,7 +2,7 @@
  * Items excluded from all analyses — consumables and wards that add noise.
  * Keyed by internal name (matches OpenDota items map keys).
  */
-export const EXCLUDED_ITEM_NAMES = new Set([
+const EXCLUDED_EXACT = new Set([
   "tango",
   "flask",              // Healing Salve
   "clarity",
@@ -13,4 +13,11 @@ export const EXCLUDED_ITEM_NAMES = new Set([
   "ward_sentry",
   "ward_dispenser",     // Observer and Sentry Wards
   "tome_of_knowledge",
+  "cheese",
+  "faerie_fire",
 ]);
+
+/** Returns true if an item name should be excluded from analyses. */
+export function isExcludedItem(name: string): boolean {
+  return EXCLUDED_EXACT.has(name) || name.startsWith("recipe_");
+}

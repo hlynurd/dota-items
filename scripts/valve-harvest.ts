@@ -21,7 +21,7 @@ if (!STEAM_KEY) { console.error("STEAM_API_KEY not set"); process.exit(1); }
 
 const API_URL = "https://api.steampowered.com/IDOTA2Match_570/GetMatchHistoryBySequenceNum/v1/";
 const MATCHES_PER_CALL = 100;
-const DELAY_MS = 3000; // ~20 calls/min — avoids 429s from Valve
+const DELAY_MS = 4000; // ~15 calls/min — conservative to avoid 429s
 
 // ─── Excluded / component item IDs ───────────────────────────────────────────
 
