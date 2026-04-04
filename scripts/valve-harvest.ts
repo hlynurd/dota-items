@@ -37,6 +37,8 @@ const EXCLUDED_ITEM_IDS = new Set([
   43,   // Sentry Ward
   218,  // Ward Dispenser
   257,  // Tome of Knowledge
+  33,   // Cheese
+  237,  // Faerie Fire
 ]);
 
 // Leaf components (cheap intermediates < 2000g, not full items)
