@@ -1,9 +1,7 @@
-import { after } from "next/server";
 import { getHeroes, getItemsMap } from "@/lib/opendota/client";
 import type { OpenDotaHero } from "@/lib/opendota/types";
 import type { ItemOption } from "./components/ItemPicker";
 import type { StaticData } from "@/lib/analysis/client-compute";
-import { runMarginalAggregate } from "@/scripts/aggregate";
 import { EXCLUDED_ITEM_NAMES } from "@/lib/utils/excluded-items";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -16,14 +14,6 @@ function loadStaticData(): StaticData | null {
 }
 
 export default async function Page() {
-  after(async () => {
-    try {
-      await runMarginalAggregate();
-    } catch (err) {
-      console.error("[page] Background aggregate failed:", err);
-    }
-  });
-
   let heroes: OpenDotaHero[] = [];
   let items: ItemOption[] = [];
   let staticData: StaticData | null = null;
