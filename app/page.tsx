@@ -1,7 +1,10 @@
 import { after } from "next/server";
-import { getHeroes } from "@/lib/opendota/client";
+import { getHeroes, getItemsMap } from "@/lib/opendota/client";
+import { getItemIdsWithData } from "@/lib/db/queries";
 import type { OpenDotaHero } from "@/lib/opendota/types";
+import type { ItemOption } from "./components/ItemPicker";
 import { runMarginalAggregate } from "@/scripts/aggregate";
+import { EXCLUDED_ITEM_NAMES } from "@/lib/utils/excluded-items";
 import DraftApp from "./components/DraftApp";
 
 export default async function Page() {
@@ -16,10 +19,24 @@ export default async function Page() {
   });
 
   let heroes: OpenDotaHero[] = [];
+  let items: ItemOption[] = [];
   try {
-    heroes = await getHeroes();
+    const [h, itemsMap, itemIdsWithData] = await Promise.all([
+      getHeroes(),
+      getItemsMap(),
+      getItemIdsWithData(),
+    ]);
+    heroes = h;
+    items = Object.entries(itemsMap)
+      .filter(([name, item]) => item.cost > 0 && item.dname && itemIdsWithData.has(item.id) && !EXCLUDED_ITEM_NAMES.has(name))
+      .map(([name, item]) => ({
+        id: item.id,
+        name,
+        dname: item.dname,
+        cost: item.cost,
+      }));
   } catch {
-    // OpenDota unreachable — app still renders, picker will be empty
+    // OpenDota unreachable — app still renders, pickers will be empty
   }
-  return <DraftApp heroes={heroes} />;
+  return <DraftApp heroes={heroes} items={items} />;
 }

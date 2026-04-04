@@ -120,3 +120,43 @@ export interface AgentResponse {
   builds: HeroBuild[];
   draft: DraftInput;
 }
+
+// ─── Item Mode types ─────────────────────────────────────────────────────────
+
+export interface ItemHeroEntry {
+  hero_id: number;
+  hero_name: string;         // localized e.g. "Anti-Mage"
+  hero_internal_name: string; // e.g. "npc_dota_hero_antimage"
+  wr_with: number;      // WR when this item is bought against this hero
+  wr_without: number;   // WR when this item is NOT bought against this hero
+  diff: number;         // positive = buying this item against this hero is good
+  buy_rate: number;     // multiplier vs baseline: 1.5 = bought 1.5x more against this hero
+  match_games: number;  // number of matches where item was bought against this hero
+}
+
+export interface ItemLookupResult {
+  item_id: number;
+  item_name: string;
+  display_name: string;
+  heroes: ItemHeroEntry[];
+}
+
+// ─── Hero Mode types ─────────────────────────────────────────────────────────
+
+export interface HeroItemEntry {
+  item_id: number;
+  item_name: string;
+  display_name: string;
+  buy_rate: number;     // multiplier vs baseline
+  wr_with: number;      // WR when this item is bought (given hero context)
+  wr_without: number;   // WR when this item is NOT bought
+  diff: number;         // wr_with - wr_without
+  match_games: number;
+}
+
+export interface HeroLookupResult {
+  hero_id: number;
+  hero_name: string;
+  side: "enemy" | "ally";
+  items: HeroItemEntry[];
+}

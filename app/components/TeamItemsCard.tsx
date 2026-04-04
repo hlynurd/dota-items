@@ -4,7 +4,7 @@ import { useState, useMemo } from "react";
 import type { TeamItemsResult, TeamItemEntry } from "@/lib/agent/types";
 import { itemImgUrl } from "@/lib/utils/cdn";
 
-type SortKey = "purchase_lift" | "wr_with" | "wr_without" | "wr_diff" | "match_games";
+type SortKey = "display_name" | "purchase_lift" | "wr_with" | "wr_without" | "wr_diff" | "match_games";
 
 function ItemRow({ item }: { item: TeamItemEntry }) {
   const wrWithPct = (item.wr_with * 100).toFixed(1);
@@ -81,13 +81,18 @@ export default function TeamItemsCard({ data }: { data: TeamItemsResult }) {
       setAscending(!ascending);
     } else {
       setSortKey(key);
-      setAscending(false);
+      setAscending(key === "display_name"); // default A-Z for name
     }
   }
 
   const sorted = useMemo(() => {
     const items = [...data.all_items];
     items.sort((a, b) => {
+      if (sortKey === "display_name") {
+        return ascending
+          ? a.display_name.localeCompare(b.display_name)
+          : b.display_name.localeCompare(a.display_name);
+      }
       const av = sortKey === "wr_diff" ? a.wr_with - a.wr_without : a[sortKey];
       const bv = sortKey === "wr_diff" ? b.wr_with - b.wr_without : b[sortKey];
       return ascending ? av - bv : bv - av;
@@ -108,7 +113,7 @@ export default function TeamItemsCard({ data }: { data: TeamItemsResult }) {
       <div className="p-4">
         <div className="flex items-center gap-2 pb-2 mb-1 border-b border-zinc-800 text-xs text-zinc-600 font-mono">
           <span className="w-8 shrink-0" />
-          <span className="flex-1">Item</span>
+          <SortHeader label="Item" sortKey="display_name" active={sortKey === "display_name"} ascending={ascending} onClick={handleSort} className="flex-1 !text-left" />
           <SortHeader label="Buy" sortKey="purchase_lift" active={sortKey === "purchase_lift"} ascending={ascending} onClick={handleSort} className="shrink-0 w-12" />
           <SortHeader label="With" sortKey="wr_with" active={sortKey === "wr_with"} ascending={ascending} onClick={handleSort} className="shrink-0 w-14" />
           <SortHeader label="W/o" sortKey="wr_without" active={sortKey === "wr_without"} ascending={ascending} onClick={handleSort} className="shrink-0 w-14" />

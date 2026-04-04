@@ -30,12 +30,19 @@ interface MarginalRawRow extends Record<string, unknown> {
   item_id: number;
   time_s: number;
   won: boolean;
+  radiant_win: boolean;
   opp_0: number; opp_1: number; opp_2: number; opp_3: number; opp_4: number;
   team_0: number; team_1: number; team_2: number; team_3: number; team_4: number;
+  r0: number; r1: number; r2: number; r3: number; r4: number;
+  d0: number; d1: number; d2: number; d3: number; d4: number;
 }
 
 export async function runMarginalAggregate(): Promise<{ marginal_rows: number; baseline_rows: number }> {
   const shards = getShards();
+
+  // Truncate aggregate tables to remove stale rows from previous runs
+  await db.execute(sql`TRUNCATE ${item_marginal_win_rates}, ${item_baseline_win_rates}, ${context_hero_totals}`);
+  console.log(`[marginal] Truncated aggregate tables`);
   console.log(`[marginal] Reading raw data from ${shards.length} shard(s)...`);
 
   // Purchase-event-level accumulators (existing)
@@ -46,7 +53,16 @@ export async function runMarginalAggregate(): Promise<{ marginal_rows: number; b
   // Key = same as marginal. Value = Set<match_id> would be too large.
   // Instead, collect per-match item sets and compute match-level counts.
   // Structure: matchItems[match_id] = { items: Set<item_id>, enemies: number[], won: boolean }
-  const matchData = new Map<number, { items: Set<number>; enemies: number[]; allies: number[]; won: boolean; timings: Map<number, number> }>();
+  // Match-level dedup uses absolute radiant/dire to avoid perspective bugs.
+  // Each side's items are tracked separately with their buyers.
+  const matchData = new Map<number, {
+    radiant: number[];  // 5 hero ids
+    dire: number[];     // 5 hero ids
+    radiantWon: boolean;
+    radiantItems: Map<number, Set<number>>; // item_id → set of hero_ids who bought it
+    direItems: Map<number, Set<number>>;
+    timings: Map<number, number>;
+  }>();
 
   const bumpMap = (map: Map<string, { games: number; wins: number }>, key: string, won: boolean) => {
     const cur = map.get(key) ?? { games: 0, wins: 0 };
@@ -76,6 +92,9 @@ export async function runMarginalAggregate(): Promise<{ marginal_rows: number; b
       const raw = await shard.execute<MarginalRawRow>(sql`
         SELECT
           it.match_id, it.hero_id, it.item_id, it.time_s, it.won,
+          m.radiant_win,
+          m.radiant_0 AS r0, m.radiant_1 AS r1, m.radiant_2 AS r2, m.radiant_3 AS r3, m.radiant_4 AS r4,
+          m.dire_0 AS d0, m.dire_1 AS d1, m.dire_2 AS d2, m.dire_3 AS d3, m.dire_4 AS d4,
           CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
             THEN m.dire_0    ELSE m.radiant_0 END AS opp_0,
           CASE WHEN it.hero_id IN (m.radiant_0, m.radiant_1, m.radiant_2, m.radiant_3, m.radiant_4)
@@ -118,13 +137,25 @@ export async function runMarginalAggregate(): Promise<{ marginal_rows: number; b
           }
         }
 
-        // Collect per-match data for match-level dedup
+        // Collect per-match data for match-level dedup (absolute radiant/dire)
         let md = matchData.get(row.match_id);
         if (!md) {
-          md = { items: new Set(), enemies: opps, allies, won: row.won, timings: new Map() };
+          md = {
+            radiant: [row.r0, row.r1, row.r2, row.r3, row.r4],
+            dire: [row.d0, row.d1, row.d2, row.d3, row.d4],
+            radiantWon: row.radiant_win,
+            radiantItems: new Map(),
+            direItems: new Map(),
+            timings: new Map(),
+          };
           matchData.set(row.match_id, md);
         }
-        md.items.add(row.item_id);
+        // Determine which side the buyer is on and track per-side
+        const isRadiant = md.radiant.includes(row.hero_id);
+        const sideItems = isRadiant ? md.radiantItems : md.direItems;
+        let buyers = sideItems.get(row.item_id);
+        if (!buyers) { buyers = new Set(); sideItems.set(row.item_id, buyers); }
+        buyers.add(row.hero_id);
         const prev = md.timings.get(row.item_id);
         if (prev === undefined || row.time_s < prev) {
           md.timings.set(row.item_id, row.time_s);
@@ -161,24 +192,50 @@ export async function runMarginalAggregate(): Promise<{ marginal_rows: number; b
   };
 
   for (const [, md] of matchData) {
-    // Bump totals for each enemy/ally (once per match)
-    for (const opp of md.enemies) {
-      bumpTotal(`${opp}:enemy`, md.won);
+    // Hero totals: each hero counted once as enemy (for the other side) and once as ally (for own side)
+    for (const hero of md.radiant) {
+      bumpTotal(`${hero}:enemy`, !md.radiantWon); // radiant hero is enemy from dire's POV; dire "won" = !radiantWon
+      bumpTotal(`${hero}:ally`, md.radiantWon);
     }
-    for (const ally of md.allies) {
-      bumpTotal(`${ally}:ally`, md.won);
+    for (const hero of md.dire) {
+      bumpTotal(`${hero}:enemy`, md.radiantWon);  // dire hero is enemy from radiant's POV; radiant "won" = radiantWon
+      bumpTotal(`${hero}:ally`, !md.radiantWon);
     }
 
-    // For each unique item bought in this match, bump match-level counts
-    for (const item_id of md.items) {
+    // Process items bought by radiant
+    for (const [item_id, buyers] of md.radiantItems) {
       const time_s = md.timings.get(item_id) ?? 0;
       const buckets = timeToBucket(time_s);
+      const won = md.radiantWon;
       for (const bucket of buckets) {
-        for (const opp of md.enemies) {
-          bumpMatch(`${item_id}:${opp}:enemy:${bucket}`, md.won);
+        // Enemy side: radiant bought this item, dire heroes are enemies
+        for (const enemy of md.dire) {
+          bumpMatch(`${item_id}:${enemy}:enemy:${bucket}`, won);
         }
-        for (const ally of md.allies) {
-          bumpMatch(`${item_id}:${ally}:ally:${bucket}`, md.won);
+        // Ally side: radiant heroes who did NOT buy this item
+        for (const ally of md.radiant) {
+          if (!buyers.has(ally)) {
+            bumpMatch(`${item_id}:${ally}:ally:${bucket}`, won);
+          }
+        }
+      }
+    }
+
+    // Process items bought by dire
+    for (const [item_id, buyers] of md.direItems) {
+      const time_s = md.timings.get(item_id) ?? 0;
+      const buckets = timeToBucket(time_s);
+      const won = !md.radiantWon;
+      for (const bucket of buckets) {
+        // Enemy side: dire bought this item, radiant heroes are enemies
+        for (const enemy of md.radiant) {
+          bumpMatch(`${item_id}:${enemy}:enemy:${bucket}`, won);
+        }
+        // Ally side: dire heroes who did NOT buy this item
+        for (const ally of md.dire) {
+          if (!buyers.has(ally)) {
+            bumpMatch(`${item_id}:${ally}:ally:${bucket}`, won);
+          }
         }
       }
     }
