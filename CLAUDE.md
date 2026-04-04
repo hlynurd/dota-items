@@ -2,7 +2,7 @@
 
 # Dota 2 Itemization Advisor
 
-A web app for exploring Dota 2 itemization data through team-level marginal statistics. Users pick a hero or item from Friend (ally) or Foe (enemy) perspective and see sortable tables of purchase rates and win rate impacts.
+A web app for exploring Dota 2 itemization data through team-level marginal statistics. Users pick an enemy hero or item and see sortable tables of purchase rates and win rate impacts.
 
 ## Stack
 
@@ -20,18 +20,11 @@ A web app for exploring Dota 2 itemization data through team-level marginal stat
 app/
   page.tsx                    # Server component: fetches hero/item lists, renders DraftApp
   components/
-    DraftApp.tsx              # Main client component — 2x2 grid layout, all state
+    DraftApp.tsx              # Main client component — single-column foe-only layout, all state
     HeroPicker.tsx            # Hero selection modal: search + attribute-grouped grid + ~200 aliases
     ItemPicker.tsx            # Item selection modal: search + cost-sorted grid (filtered to items with data)
     HeroItemTable.tsx         # Bare sortable item table for hero-mode quadrants
     ItemHeroTable.tsx         # Bare sortable hero table for item-mode quadrants
-    TeamItemsCard.tsx         # Legacy: sortable team item analysis card (Buy lift, WR With, WR Without, Diff, N)
-    HeroBuildCard.tsx         # Legacy: per-hero card with item phases + timing table + debug section
-    ItemChip.tsx              # Item icon + win_rate + diff vs baseline
-    ChatPanel.tsx             # Legacy: streaming chat panel with suggestion prompts
-    DraftBoard.tsx            # Legacy: 5v5 slot grid + Analyze button
-    HeroSlot.tsx              # Legacy: single slot with portrait, position, uncertain toggle
-    ResultsPanel.tsx          # Legacy: grid of HeroBuildCards + skeleton loader
   api/
     hero-lookup/
       route.ts                # GET — items for a hero (friend=ally / foe=enemy side)
@@ -41,9 +34,6 @@ app/
       route.ts                # POST — runs deterministic analyzer, streams NDJSON (rate limited: 5/IP/min)
     chat/
       route.ts                # POST — runs Claude chat agent, streams plain text
-    cron/
-      ingest/route.ts         # GET — runs ingest script (Vercel Cron, hourly at :00)
-      aggregate/route.ts      # GET — runs aggregate script (Vercel Cron, hourly at :30)
 lib/
   analysis/
     build-analyzer.ts         # Deterministic build pipeline (no LLM)
@@ -79,17 +69,16 @@ vitest.config.ts              # Vitest configuration
 vercel.json                   # Cron schedule config
 ```
 
-## UI Layout — 2x2 Grid
+## UI Layout — Single Column (Foe Only)
 
-The main page is a single-page 2x2 grid (2 columns on desktop, stacked on mobile):
+The main page has two stacked cards, both focused on enemy-side data:
 
-|  | **Friend** (ally, green) | **Foe** (enemy, red) |
-|---|---|---|
-| **By Hero** | Pick hero → items teammates buy more | Pick hero → items bought against them |
-| **By Item** | Pick item → ally heroes whose teams buy it | Pick item → enemy heroes it's bought against |
+| **By Hero** | Pick enemy hero → items bought more against them |
+|---|---|
+| **By Item** | Pick item → enemy heroes it's bought against |
 
-Each quadrant is a card with a compact picker header and an internally-scrolling sortable table.
-Columns: Item/Hero thumbnail, Name, Buy rate (Nx), WR With %, W/o %, Diff %, N matches.
+Each card has a picker header and an internally-scrolling sortable table.
+Columns: Item/Hero thumbnail, Name, Buy rate (Nx), WR Diff %.
 
 ## Key Types (defined in lib/agent/types.ts)
 
@@ -210,4 +199,3 @@ npm test             # Run vitest tests
 - Do not use `any` types except where Drizzle forces it in the DB client proxy
 - Do not fetch Dota data from the frontend — all fetching goes through API routes or server components
 - Do not call Claude in the analyze route — analysis is deterministic
-- Do not remove the debug section from HeroBuildCard — it is intentionally kept for debugging item data quality

@@ -19,6 +19,7 @@ body {
 }
 
 /* Scrollbar styling for dark theme */
+* { scrollbar-color: #3f3f46 #18181b; scrollbar-width: thin; }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: #18181b; }
 ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }

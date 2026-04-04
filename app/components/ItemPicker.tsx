@@ -27,7 +27,11 @@ export default function ItemPicker({ items, onSelect, onClose }: Props) {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
   }, [onClose]);
 
   const filtered = useMemo(() => {
@@ -46,6 +50,9 @@ export default function ItemPicker({ items, onSelect, onClose }: Props) {
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm pt-16 px-4"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Pick an item"
     >
       <div
         className="w-full max-w-2xl bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl
@@ -77,6 +84,8 @@ export default function ItemPicker({ items, onSelect, onClose }: Props) {
                   <img
                     src={itemImgUrl(item.name)}
                     alt={item.dname}
+                    loading="lazy"
+                    decoding="async"
                     className="w-full h-full object-cover"
                     onError={(e) => {
                       (e.target as HTMLImageElement).style.display = "none";
@@ -87,6 +96,7 @@ export default function ItemPicker({ items, onSelect, onClose }: Props) {
                   text-center leading-tight truncate w-full">
                   {item.dname}
                 </span>
+                <span className="text-[10px] text-yellow-600/80">{item.cost}g</span>
               </button>
             ))}
             {filtered.length === 0 && (

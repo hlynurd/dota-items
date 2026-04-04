@@ -28,7 +28,11 @@ export default function HeroPicker({ heroes, excludeIds, onSelect, onClose }: Pr
     inputRef.current?.focus();
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
   }, [onClose]);
 
   const available = heroes.filter((h) => !excludeIds.has(h.id));
@@ -42,7 +46,9 @@ export default function HeroPicker({ heroes, excludeIds, onSelect, onClose }: Pr
     : null; // null means show grouped view
 
   const grouped = ATTR_ORDER.reduce<Record<string, OpenDotaHero[]>>((acc, attr) => {
-    acc[attr] = available.filter((h) => h.primary_attr === attr);
+    acc[attr] = available
+      .filter((h) => h.primary_attr === attr)
+      .sort((a, b) => a.localized_name.localeCompare(b.localized_name));
     return acc;
   }, {});
 
@@ -50,6 +56,9 @@ export default function HeroPicker({ heroes, excludeIds, onSelect, onClose }: Pr
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm pt-16 px-4"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Pick a hero"
     >
       <div
         className="w-full max-w-2xl bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl
@@ -115,6 +124,8 @@ function HeroCard({ hero, onSelect }: { hero: OpenDotaHero; onSelect: (h: OpenDo
         <img
           src={heroImgUrl(hero.name)}
           alt={hero.localized_name}
+          loading="lazy"
+          decoding="async"
           className="w-full h-full object-cover object-top"
           onError={(e) => {
             (e.target as HTMLImageElement).src = "";

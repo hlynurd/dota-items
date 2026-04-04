@@ -2,20 +2,19 @@
 
 ## Core Concept
 
-A single-page app for exploring Dota 2 itemization data through **team-level marginal statistics**. Pick a hero or item from a Friend (ally) or Foe (enemy) perspective and see sortable tables of purchase rates and win rate impacts.
+A single-page app for exploring Dota 2 itemization data through **team-level marginal statistics**. Pick an enemy hero or item and see sortable tables of purchase rates and win rate impacts.
 
 ---
 
-## UI: 2x2 Grid Layout
+## UI: Single Column (Foe Only)
 
-The main page shows a 2x2 grid (2 columns on desktop, stacked on mobile):
+The main page has two stacked cards, both focused on enemy-side data:
 
-|  | **Friend** (ally, green accent) | **Foe** (enemy, red accent) |
-|---|---|---|
-| **By Hero** | Pick hero → items teammates buy more | Pick hero → items bought against them |
-| **By Item** | Pick item → ally heroes whose teams buy it | Pick item → enemy heroes it's bought against |
+| **By Hero** | Pick enemy hero → items bought more against them |
+|---|---|
+| **By Item** | Pick item → enemy heroes it's bought against |
 
-Each quadrant is a card with:
+Each card has:
 - A compact header with picker button (hero portrait or item icon)
 - An internally-scrolling sortable data table
 
@@ -23,18 +22,15 @@ Each quadrant is a card with:
 - Thumbnail (item icon or hero portrait)
 - Name (sortable alphabetically)
 - **Buy** — purchase rate vs baseline (Nx multiplier). Green ≥1.2x, red ≤0.8x
-- **With** — win rate when this item is bought (given hero context)
-- **W/o** — win rate when this item is NOT bought
-- **Diff** — With minus W/o, color-coded green (positive) / red (negative)
-- **N** — number of matches in sample
+- **Diff** — WR With minus WR Without, color-coded green (positive) / red (negative)
 
 ### Hero Selection
 - Searchable modal by hero name (instant, client-side)
 - Supports ~200 nicknames/aliases (e.g. "crix" for Sand King, "cm" for Crystal Maiden)
-- Grid grouped by attribute (Strength / Agility / Intelligence / Universal)
+- Grid grouped by attribute (Strength / Agility / Intelligence / Universal), alphabetical within each group
 
 ### Item Selection
-- Searchable modal sorted by cost descending
+- Searchable modal sorted by cost descending, gold cost shown per item
 - Only items with existing data in the DB are shown
 - Consumables/wards excluded (Tango, Salve, Clarity, TP, Mango, Smoke, Wards, Tome)
 
@@ -42,43 +38,40 @@ Each quadrant is a card with:
 
 ## Analysis Pipeline
 
-Uses **team-level marginal statistics**: "when anyone on the team buys item X and hero Y is on the enemy/ally team" — not hero-specific. This yields ~130x denser data than per-hero tables.
+Uses **team-level marginal statistics**: "when anyone on the team buys item X and hero Y is on the enemy team" — not hero-specific. This yields ~130x denser data than per-hero tables.
 
 ### Hero Lookup
-- Query: all items for a given `context_hero_id` + `context_side` + `before_minute=999`
+- Query: all items for a given `context_hero_id` + `context_side=enemy` + `before_minute=999`
 - Buy rate: this hero's item purchase rate / avg purchase rate across all heroes (per-item baseline)
 - WR With: `match_wins / match_games`
 - WR Without: `(total_wins - match_wins) / (total_matches - match_games)`
 
 ### Item Lookup
-- Query: all heroes for a given `item_id` + `context_side` + `before_minute=999`
+- Query: all heroes for a given `item_id` + `context_side=enemy` + `before_minute=999`
 - Buy rate: per-hero purchase rate / avg across all heroes for this item
 - Same WR With/Without formula
-
-### Ally-side integrity
-- Aggregate uses absolute radiant/dire (not relative to buyer's perspective)
-- Ally match-level counts **exclude the buyer**: `buyers.has(hero)` check
-- Aggregate truncates all tables before each run — no stale data
 
 ---
 
 ## Data Pipeline
 
-### Ingest (hourly at :00 via Vercel Cron)
-- Pages through OpenDota `/parsedMatches` (purchase_log attached)
-- All ranks included, no time-based pruning
-- Writes to least-full shard; deduplicates across all shards
-- Parses purchase_log, skips component items
+### Primary: Valve Steam API Harvester (`scripts/valve-harvest.ts`)
 
-### Aggregate (hourly at :30 via Vercel Cron)
-- Truncates aggregate tables first
-- Reads all shards (paginated in 2000-match chunks for Neon 67MB limit)
-- Tracks `radiantItems` / `direItems` separately with buyer sets
-- Computes marginal, baseline, match-level, and hero-total accumulators
-- before_minute buckets: 10, 20, 30, 40, 50, 999
+Streaming aggregation — fetches matches from Valve's API, accumulates counters in memory, writes `data.json` directly. **No database needed.**
 
-### Background Refresh
-- Page load triggers background aggregate via `after()`
+- Calls `GetMatchHistoryBySequenceNum` (100 matches/call, free)
+- Filters to ranked All Pick (`game_mode=22`, `lobby_type=7`, 10 humans, duration >= 10 min)
+- Uses end-game item slots (`item_0..item_5`) — no purchase timing
+- Accumulates per-(item, hero, side) match-level win rates in memory
+- Writes `public/data.json` at end + checkpoints every 50K matches
+- Rate: ~20 calls/min, ~100K ranked matches/hour
+- Run: `npm run valve-harvest` or `npm run valve-harvest -- --max 1000000`
+
+### Legacy: OpenDota Pipeline
+
+Still present but no longer the primary data source:
+- `scripts/ingest.ts` — OpenDota API ingest to Neon shard DB
+- `scripts/aggregate.ts` — reads shards, writes to primary DB + data.json
 
 ---
 
@@ -97,12 +90,10 @@ context_hero_totals      (context_hero_id, context_side, total_matches, total_wi
 - **Primary DB** (`DATABASE_URL`): aggregate tables only
 - **Shard DBs** (`SHARD_URLS`): raw data (matches, item_timings)
 - Backwards compatible: no `SHARD_URLS` = single-shard mode
-- Neon free tier: 100 projects × 0.5GB = 50GB potential
 
 ---
 
 ## Deployment
 
 - Vercel, auto-deploys on push to main (hlynurd/dota-items)
-- Crons: ingest :00, aggregate :30 — both require CRON_SECRET Bearer auth
-- Env vars: ANTHROPIC_API_KEY, DATABASE_URL, SHARD_URLS, CRON_SECRET, OPENDOTA_API_KEY
+- Env vars: ANTHROPIC_API_KEY, DATABASE_URL, SHARD_URLS, STEAM_API_KEY, CRON_SECRET
