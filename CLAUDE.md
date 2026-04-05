@@ -1,6 +1,6 @@
 @AGENTS.md
 
-# Dota 2 Itemization Advisor
+# Dota 2 Itemisation Stats
 
 A web app for exploring Dota 2 itemization data through team-level marginal statistics. Users pick an enemy hero or item and see sortable tables of purchase rates and win rate impacts.
 
@@ -26,17 +26,14 @@ app/
     HeroItemTable.tsx         # Bare sortable item table for hero-mode quadrants
     ItemHeroTable.tsx         # Bare sortable hero table for item-mode quadrants
   api/
-    hero-lookup/
-      route.ts                # GET — items for a hero (friend=ally / foe=enemy side)
-    item-lookup/
-      route.ts                # GET — heroes for an item (friend=ally / foe=enemy side)
     analyze/
-      route.ts                # POST — runs deterministic analyzer, streams NDJSON (rate limited: 5/IP/min)
+      route.ts                # Legacy: POST — deterministic analyzer, streams NDJSON
     chat/
-      route.ts                # POST — runs Claude chat agent, streams plain text
+      route.ts                # Legacy: POST — Claude chat agent, streams plain text
 lib/
   analysis/
-    build-analyzer.ts         # Deterministic build pipeline (no LLM)
+    client-compute.ts         # Client-side indexing + computation from static data.json
+    build-analyzer.ts         # Legacy: deterministic build pipeline
   db/
     client.ts                 # Drizzle + Neon client (lazy init, DATABASE_URL)
     schema.ts                 # matches, item_timings, item_marginal_win_rates, item_baseline_win_rates, context_hero_totals
@@ -56,12 +53,16 @@ lib/
     cdn.ts                    # Valve CDN URL helpers for hero/item images
     excluded-items.ts         # Consumable/ward item names excluded from all analyses
 scripts/
-  valve-harvest.ts             # PRIMARY: Valve Steam API bulk harvester — streaming aggregation, writes data.json directly
+  valve-harvest.ts             # PRIMARY: Valve Steam API bulk harvester — streaming aggregation → data.json
+  harvest-loop.sh              # Continuous harvest loop: harvest → commit → push → deploy every 2h
   ingest.ts                   # Legacy: OpenDota ingest → shard DB
   aggregate.ts                # Legacy: Read shards → compute marginals → write to primary DB + data.json
   setup-shard.ts              # Legacy: Provision raw tables on a new Neon shard
 tests/
-  item-coverage.test.ts       # Vitest tests for item filtering/coverage
+  client-compute.test.ts       # Core: indexing, hero/item lookups, buy rate, WR math (17 tests)
+  data-integrity.test.ts       # Core: validates data.json structure, coverage, sanity (14 tests)
+  excluded-items.test.ts       # Core: consumable/ward/recipe filtering (3 tests)
+  item-coverage.test.ts       # Legacy: component filter tests (5 tests)
 docs/
   spec.md                     # Full feature spec
 drizzle.config.ts             # Drizzle Kit config (reads DATABASE_URL)
@@ -96,22 +97,21 @@ Columns: Item/Hero thumbnail, Name, Buy rate (Nx), WR Diff %.
 
 Analysis uses **team-level marginal statistics** — not hero-specific. The question is "when anyone buys item X and hero Y is on the enemy/ally team" rather than "when hero H buys item X vs hero Y". This yields much denser data.
 
-### Hero Lookup (`/api/hero-lookup`)
-- Queries `item_marginal_win_rates` for a given `context_hero_id` + `context_side` + `before_minute=999`
-- Joins with `context_hero_totals` to compute WR without (total_matches - match_games)
-- Buy rate = this hero's purchase rate / avg purchase rate across all heroes (from `getItemBaselinePurchaseRates`)
-- Excludes consumables/wards via `EXCLUDED_ITEM_NAMES`
+### Hero Lookup (client-side via `computeHeroLookup`)
+- Indexes `data.json` marginals by hero+side key
+- WR with = match_wins / match_games; WR without = (total_wins - match_wins) / (total_matches - match_games)
+- Buy rate = this hero's item purchase rate / avg purchase rate across all heroes (per-item baseline)
+- Filtered by `allowedItemIds` (pre-filtered to exclude consumables/wards/recipes)
 
-### Item Lookup (`/api/item-lookup`)
-- Queries `item_marginal_win_rates` for a given `item_id` + `context_side` + `before_minute=999`
-- Joins with `context_hero_totals` per hero
+### Item Lookup (client-side via `computeItemLookup`)
+- Indexes `data.json` marginals by item+side key
+- Same WR with/without formula
 - Buy rate = per-hero purchase rate / avg across all heroes for this item
 
-### Ally-side data integrity
-- Aggregate tracks item purchases per-side using absolute radiant/dire (not relative to buyer)
-- `itemBuyers: Map<item_id, Set<hero_id>>` tracks who bought what per side
-- Ally match-level counts **exclude the buyer**: only teammates who did NOT buy the item are counted
-- Aggregate truncates all aggregate tables before each run to prevent stale data
+### Data integrity
+- Valve harvester tracks items per-side using absolute radiant/dire
+- `itemBuyers: Map<item_id, Set<hero_id>>` — ally counts exclude the buyer
+- No component filter needed — Valve API returns end-game items only
 
 ## DB Schema (lib/db/schema.ts)
 
@@ -142,8 +142,15 @@ Streaming aggregation — fetches matches from Valve's API, accumulates counters
 - Accumulates per-(item, hero, side) match-level win rates in memory
 - Ally counts exclude the buyer (same as aggregate.ts)
 - Writes `public/data.json` at end + checkpoints every 50K matches
-- Rate: ~20 calls/min, ~100K ranked matches/hour
-- Run: `npm run valve-harvest` or `npm run valve-harvest -- --max 1000000`
+- Supports `--merge` flag to seed accumulators from existing data.json
+- Default start: seq 7,350,000,000 (patch 7.41a, March 27 2026)
+- Rate: ~10 calls/min, ~42K ranked matches/hour
+- Run: `npm run valve-harvest` or `npm run valve-harvest -- --max 1000000 --seq 7350000000 --merge`
+
+### Continuous Harvesting (`scripts/harvest-loop.sh`)
+- Runs harvest → commit → push → deploy in a loop every 2 hours
+- Tracks sequence cursor in `.harvest-seq` file
+- Run: `nohup bash scripts/harvest-loop.sh &`
 
 ### Legacy: OpenDota Pipeline
 
@@ -153,17 +160,16 @@ Still present but no longer the primary data source:
 
 ## Excluded Items
 
-Consumables and wards excluded from all analyses (defined in `lib/utils/excluded-items.ts`):
-Tango, Healing Salve, Clarity, Town Portal Scroll, Enchanted Mango, Smoke of Deceit, Observer Ward, Sentry Ward, Ward Dispenser, Tome of Knowledge.
-
-Items kept: Gem, Dust, Faerie Fire, Blood Grenade.
+Excluded from all analyses (defined in `lib/utils/excluded-items.ts`):
+- Consumables: Tango, Healing Salve, Clarity, Town Portal Scroll, Enchanted Mango, Cheese, Faerie Fire
+- Wards/utility: Smoke of Deceit, Observer Ward, Sentry Ward, Ward Dispenser, Tome of Knowledge
+- All recipes (name starts with `recipe_`)
 
 ## Key Conventions
 
 - All OpenDota fetch logic lives in `lib/opendota/client.ts`
 - DB query logic lives in `lib/db/queries.ts`
-- `lib/tools/index.ts` is **chat-only** — do not use it in the analyze pipeline
-- Component item filter: leaf components filtered (Void Stone, Chainmail, etc.); mid-tier items >=2000g kept (Eul's, Shadow Blade); cheap intermediates <2000g filtered (Perseverance, Buckler)
+- No component item filter — Valve API returns end-game items which are naturally finished items
 - HeroPicker supports ~200 hero nicknames/aliases via `lib/opendota/hero-aliases.ts`
 - Valve CDN for images:
   - Heroes: `https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/{name}.png`
@@ -187,7 +193,7 @@ OPENDOTA_API_KEY=    # Optional, for higher OpenDota rate limits (legacy)
 ```
 npm run dev          # Local dev server
 npm run build        # Production build
-npm run valve-harvest  # PRIMARY: Valve API bulk harvest → data.json (default 500K matches)
+npm run valve-harvest  # PRIMARY: Valve API bulk harvest → data.json (default from patch 7.41a)
 npm run ingest       # Legacy: OpenDota ingest
 npm run aggregate    # Legacy: recompute marginals from DB shards
 npm test             # Run vitest tests
