@@ -248,6 +248,7 @@ async function main() {
   let rankedProcessed = 0;
   let calls = 0;
   let emptyStreak = 0;
+  let nextCheckpoint = checkpointEvery;
   const startTime = Date.now();
 
   while (rankedProcessed < maxMatches) {
@@ -286,7 +287,7 @@ async function main() {
     }
 
     // Save checkpoint + optionally deploy
-    if (rankedProcessed > 0 && rankedProcessed % checkpointEvery === 0) {
+    if (rankedProcessed >= nextCheckpoint) {
       writeDataJson();
       console.log(`[harvest] Checkpoint at ${rankedProcessed.toLocaleString()} matches`);
       if (deploy) {
@@ -298,6 +299,7 @@ async function main() {
           console.warn(`[harvest] Deploy failed, continuing harvest`);
         }
       }
+      nextCheckpoint += checkpointEvery;
     }
 
     await sleep(DELAY_MS);
