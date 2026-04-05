@@ -147,10 +147,16 @@ Streaming aggregation — fetches matches from Valve's API, accumulates counters
 - Rate: ~10 calls/min, ~42K ranked matches/hour
 - Run: `npm run valve-harvest` or `npm run valve-harvest -- --max 1000000 --seq 7350000000 --merge`
 
-### Continuous Harvesting (`scripts/harvest-loop.sh`)
-- Runs harvest → commit → push → deploy in a loop every 2 hours
+### Continuous Local Harvesting (`scripts/harvest-escalating.sh`)
+- Escalating deploy intervals: 5K x10, 10K x10, 20K x10, 50K x10, then 100K forever
+- Auto commits, pushes, and deploys at each checkpoint via `--deploy` flag
 - Tracks sequence cursor in `.harvest-seq` file
-- Run: `nohup bash scripts/harvest-loop.sh &`
+- Run: `nohup bash scripts/harvest-escalating.sh > /tmp/harvest-escalating.log 2>&1 &`
+
+### Daily GitHub Actions Harvest (`.github/workflows/harvest.yml`)
+- Runs at midnight UTC daily (also manually triggerable)
+- Harvests 100K matches with `--merge`, commits data.json, deploys to Vercel
+- Requires secrets: `STEAM_API_KEY`, `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`
 
 ### Legacy: OpenDota Pipeline
 
