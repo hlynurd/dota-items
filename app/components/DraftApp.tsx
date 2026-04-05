@@ -50,6 +50,7 @@ export default function DraftApp({
   const [foeItem, setFoeItem] = useState<ItemOption | null>(null);
   const [showHeroPicker, setShowHeroPicker] = useState(false);
   const [showItemPicker, setShowItemPicker] = useState(false);
+  const [debug, setDebug] = useState(false);
 
   const filteredItemIds = useMemo(() => new Set(items.map((i) => i.id)), [items]);
 
@@ -174,7 +175,7 @@ export default function DraftApp({
         </div>
 
         <Card header={<HeroPickerButton />}>
-          {foeHeroResult ? <HeroItemTable data={foeHeroResult} /> :
+          {foeHeroResult ? <HeroItemTable data={foeHeroResult} debug={debug} /> :
             <div className="flex-1 flex items-center justify-center p-8">
               <p className="text-sm text-zinc-500">Pick an enemy hero to see what items are bought against them</p>
             </div>}
@@ -187,11 +188,24 @@ export default function DraftApp({
         </div>
 
         <Card header={<ItemPickerButton />}>
-          {foeItemResult ? <ItemHeroTable data={foeItemResult} /> :
+          {foeItemResult ? <ItemHeroTable data={foeItemResult} debug={debug} /> :
             <div className="flex-1 flex items-center justify-center p-8">
               <p className="text-sm text-zinc-500">Pick an item to see which enemy heroes it&apos;s bought against</p>
             </div>}
         </Card>
+        {/* Debug toggle */}
+        <div className="flex justify-center pt-4 pb-2">
+          <button
+            onClick={() => setDebug(!debug)}
+            className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+              debug
+                ? "border-zinc-600 text-zinc-300 bg-zinc-800"
+                : "border-zinc-800 text-zinc-600 hover:text-zinc-400 hover:border-zinc-700"
+            }`}
+          >
+            {debug ? "Hide debug" : "Debug"}
+          </button>
+        </div>
       </main>
 
       {showHeroPicker && (
