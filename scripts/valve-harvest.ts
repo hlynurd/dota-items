@@ -15,6 +15,7 @@ config({ path: ".env.local" });
 
 import { writeFileSync, readFileSync, existsSync } from "fs";
 import { join } from "path";
+import { execSync } from "child_process";
 
 const STEAM_KEY = process.env.STEAM_API_KEY ?? "";
 if (!STEAM_KEY) { console.error("STEAM_API_KEY not set"); process.exit(1); }
@@ -212,11 +213,15 @@ async function main() {
   let maxMatches = 500_000;
   let startSeq = 7_350_000_000; // patch 7.41a (March 27, 2026): Largo, Consecrated Wraps, Crella's Crozier
   let merge = false;
+  let deploy = false;
+  let checkpointEvery = 50_000;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--max" && args[i + 1]) maxMatches = parseInt(args[i + 1]);
     if (args[i] === "--seq" && args[i + 1]) startSeq = parseInt(args[i + 1]);
     if (args[i] === "--merge") merge = true;
+    if (args[i] === "--deploy") deploy = true;
+    if (args[i] === "--checkpoint" && args[i + 1]) checkpointEvery = parseInt(args[i + 1]);
   }
 
   // Seed accumulators from existing data.json if --merge
@@ -280,10 +285,19 @@ async function main() {
       console.log(`[harvest] ${rankedProcessed.toLocaleString()} ranked / ${totalFetched.toLocaleString()} total | ${calls} calls | ${Math.round(elapsed)}s | ${rate.toLocaleString()}/hr | seq ${seq}`);
     }
 
-    // Save checkpoint every 50K processed matches
-    if (rankedProcessed > 0 && rankedProcessed % 50_000 === 0) {
+    // Save checkpoint + optionally deploy
+    if (rankedProcessed > 0 && rankedProcessed % checkpointEvery === 0) {
       writeDataJson();
-      console.log(`[harvest] Checkpoint saved at ${rankedProcessed.toLocaleString()} matches`);
+      console.log(`[harvest] Checkpoint at ${rankedProcessed.toLocaleString()} matches`);
+      if (deploy) {
+        try {
+          execSync('git add public/data.json && git commit -m "data.json: ' + rankedProcessed.toLocaleString() + ' ranked matches (patch 7.41a)" && git push origin main', { stdio: "pipe", cwd: process.cwd() });
+          execSync('vercel --prod --yes', { stdio: "pipe", cwd: process.cwd(), timeout: 300_000 });
+          console.log(`[harvest] Deployed at ${rankedProcessed.toLocaleString()} matches`);
+        } catch (e) {
+          console.warn(`[harvest] Deploy failed, continuing harvest`);
+        }
+      }
     }
 
     await sleep(DELAY_MS);
