@@ -255,6 +255,8 @@ export const HERO_ALIASES: Record<string, number> = {
   rm: 145,
   // Kez
   assassin: 146,
+  // Largo
+  // (hero 155 — very new, may lack data)
 };
 
 /**

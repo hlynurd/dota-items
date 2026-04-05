@@ -13,7 +13,7 @@
 import { config } from "dotenv";
 config({ path: ".env.local" });
 
-import { writeFileSync } from "fs";
+import { writeFileSync, readFileSync, existsSync } from "fs";
 import { join } from "path";
 
 const STEAM_KEY = process.env.STEAM_API_KEY ?? "";
@@ -210,11 +210,29 @@ function writeDataJson() {
 async function main() {
   const args = process.argv.slice(2);
   let maxMatches = 500_000;
-  let startSeq = 7_050_000_000; // recent matches (early 2026)
+  let startSeq = 7_350_000_000; // patch 7.41a (March 27, 2026): Largo, Consecrated Wraps, Crella's Crozier
+  let merge = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--max" && args[i + 1]) maxMatches = parseInt(args[i + 1]);
     if (args[i] === "--seq" && args[i + 1]) startSeq = parseInt(args[i + 1]);
+    if (args[i] === "--merge") merge = true;
+  }
+
+  // Seed accumulators from existing data.json if --merge
+  if (merge) {
+    const jsonPath = join(process.cwd(), "public", "data.json");
+    if (existsSync(jsonPath)) {
+      const existing = JSON.parse(readFileSync(jsonPath, "utf-8"));
+      for (const [item_id, hero_id, side, mg, mw] of existing.m) {
+        const key = `${item_id}:${hero_id}:${side}`;
+        matchLevel.set(key, { match_games: mg, match_wins: mw });
+      }
+      for (const [hero_id, side, tm, tw] of existing.t) {
+        heroTotals.set(`${hero_id}:${side}`, { total_matches: tm, total_wins: tw });
+      }
+      console.log(`[harvest] Merged existing data: ${matchLevel.size} marginals, ${heroTotals.size} totals`);
+    }
   }
 
   console.log(`[harvest] Starting from seq ${startSeq}, target ${maxMatches} ranked matches`);

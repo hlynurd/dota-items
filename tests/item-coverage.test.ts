@@ -125,41 +125,4 @@ describe("component filter", () => {
   });
 });
 
-// ─── DB item presence tests (real DB) ────────────────────────────────────────
-
-import { db } from "@/lib/db/client";
-import { sql } from "drizzle-orm";
-
-describe("DB marginal data", () => {
-  it("Eul's (item 100) has marginal data vs Axe (hero 2)", async () => {
-    const res = await db.execute<{ games: number }>(sql`
-      SELECT games FROM item_marginal_win_rates
-      WHERE item_id = 100 AND context_hero_id = 2 AND context_side = 'enemy' AND before_minute = 999
-    `);
-    expect(res.rows.length).toBe(1);
-    expect(res.rows[0].games).toBeGreaterThan(5); // team-level = much more data
-  });
-
-  it("BKB (item 116) has marginal data vs Axe", async () => {
-    const res = await db.execute<{ games: number }>(sql`
-      SELECT games FROM item_marginal_win_rates
-      WHERE item_id = 116 AND context_hero_id = 2 AND context_side = 'enemy' AND before_minute = 999
-    `);
-    expect(res.rows.length).toBe(1);
-    expect(res.rows[0].games).toBeGreaterThan(5);
-  });
-
-  it("baseline exists for common items", async () => {
-    const res = await db.execute<{ cnt: string }>(sql`
-      SELECT COUNT(*)::text AS cnt FROM item_baseline_win_rates WHERE before_minute = 999
-    `);
-    expect(parseInt(res.rows[0].cnt)).toBeGreaterThan(50); // should have many items
-  });
-
-  it("ally marginals exist", async () => {
-    const res = await db.execute<{ cnt: string }>(sql`
-      SELECT COUNT(*)::text AS cnt FROM item_marginal_win_rates WHERE context_side = 'ally' AND before_minute = 999
-    `);
-    expect(parseInt(res.rows[0].cnt)).toBeGreaterThan(100);
-  });
-});
+// Legacy DB tests removed — primary data path no longer uses the database.

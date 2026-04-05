@@ -51,11 +51,6 @@ export default function DraftApp({
   const [showHeroPicker, setShowHeroPicker] = useState(false);
   const [showItemPicker, setShowItemPicker] = useState(false);
 
-  const selectedHeroIds = useMemo(
-    () => new Set(foeHero ? [foeHero.id] : []),
-    [foeHero]
-  );
-
   const filteredItemIds = useMemo(() => new Set(items.map((i) => i.id)), [items]);
 
   // ─── Computed results (instant, no API calls) ─────────────────────────────
@@ -160,7 +155,7 @@ export default function DraftApp({
       <header className="border-b border-zinc-800 px-6 py-3">
         <div className="max-w-[1600px] mx-auto flex items-center gap-3">
           <div className="w-2 h-6 bg-red-500 rounded-sm" />
-          <h1 className="text-xl font-semibold tracking-tight">Dota 2 Itemization Advisor</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Dota 2 Itemisation Stats</h1>
           <span className="ml-2 text-xs text-zinc-500 font-mono">beta</span>
         </div>
       </header>
@@ -200,7 +195,7 @@ export default function DraftApp({
       </main>
 
       {showHeroPicker && (
-        <HeroPicker heroes={heroes} excludeIds={selectedHeroIds}
+        <HeroPicker heroes={heroes} excludeIds={new Set()}
           onSelect={handleHeroSelect} onClose={() => setShowHeroPicker(false)} />
       )}
       {showItemPicker && (

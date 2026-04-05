@@ -6,19 +6,19 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Dota 2 Itemization Advisor",
-  description: "See which items win more when a hero is on your team or the enemy team — backed by 150K+ ranked matches",
+  title: "Dota 2 Itemisation Stats",
+  description: "See which items win more against each enemy hero — backed by 400K+ ranked matches",
   icons: { icon: "/favicon.svg" },
   openGraph: {
-    title: "Dota 2 Itemization Advisor",
-    description: "See which items win more when a hero is on your team or the enemy team — backed by 150K+ ranked matches",
+    title: "Dota 2 Itemisation Stats",
+    description: "See which items win more against each enemy hero — backed by 400K+ ranked matches",
     type: "website",
-    siteName: "Dota 2 Itemization Advisor",
+    siteName: "Dota 2 Itemisation Stats",
   },
   twitter: {
     card: "summary",
-    title: "Dota 2 Itemization Advisor",
-    description: "See which items win more when a hero is on your team or the enemy team — backed by 150K+ ranked matches",
+    title: "Dota 2 Itemisation Stats",
+    description: "See which items win more against each enemy hero — backed by 400K+ ranked matches",
   },
 };
 
