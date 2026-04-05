@@ -65,7 +65,7 @@ function ItemRow({ item, debug }: { item: HeroItemEntry; debug: boolean }) {
   );
 }
 
-export default function HeroItemTable({ data, debug = false }: { data: HeroLookupResult; debug?: boolean }) {
+export default function HeroItemTable({ data, debug = false, minGames = 0 }: { data: HeroLookupResult; debug?: boolean; minGames?: number }) {
   const [sortKey, setSortKey] = useState<SortKey>("buy_rate");
   const [ascending, setAscending] = useState(false);
 
@@ -75,7 +75,7 @@ export default function HeroItemTable({ data, debug = false }: { data: HeroLooku
   }
 
   const sorted = useMemo(() => {
-    const items = [...data.items];
+    const items = data.items.filter((i) => i.match_games >= minGames);
     items.sort((a, b) => {
       if (sortKey === "display_name") return ascending ? a.display_name.localeCompare(b.display_name) : b.display_name.localeCompare(a.display_name);
       const av = sortKey === "wr_diff" ? a.diff : a[sortKey];
@@ -83,7 +83,7 @@ export default function HeroItemTable({ data, debug = false }: { data: HeroLooku
       return ascending ? av - bv : bv - av;
     });
     return items;
-  }, [data.items, sortKey, ascending]);
+  }, [data.items, sortKey, ascending, minGames]);
 
   return (
     <div className="flex flex-col min-h-0 flex-1">

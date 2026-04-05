@@ -63,7 +63,7 @@ function HeroRow({ entry, debug }: { entry: ItemHeroEntry; debug: boolean }) {
   );
 }
 
-export default function ItemHeroTable({ data, debug = false }: { data: ItemLookupResult; debug?: boolean }) {
+export default function ItemHeroTable({ data, debug = false, minGames = 0 }: { data: ItemLookupResult; debug?: boolean; minGames?: number }) {
   const [sortKey, setSortKey] = useState<SortKey>("diff");
   const [ascending, setAscending] = useState(false);
 
@@ -73,7 +73,7 @@ export default function ItemHeroTable({ data, debug = false }: { data: ItemLooku
   }
 
   const sorted = useMemo(() => {
-    const items = [...data.heroes];
+    const items = data.heroes.filter((h) => h.match_games >= minGames);
     items.sort((a, b) => {
       if (sortKey === "hero_name") return ascending ? a.hero_name.localeCompare(b.hero_name) : b.hero_name.localeCompare(a.hero_name);
       const av = a[sortKey];
@@ -81,7 +81,7 @@ export default function ItemHeroTable({ data, debug = false }: { data: ItemLooku
       return ascending ? av - bv : bv - av;
     });
     return items;
-  }, [data.heroes, sortKey, ascending]);
+  }, [data.heroes, sortKey, ascending, minGames]);
 
   return (
     <div className="flex flex-col min-h-0 flex-1">

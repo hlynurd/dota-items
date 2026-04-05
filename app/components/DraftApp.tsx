@@ -51,6 +51,7 @@ export default function DraftApp({
   const [showHeroPicker, setShowHeroPicker] = useState(false);
   const [showItemPicker, setShowItemPicker] = useState(false);
   const [debug, setDebug] = useState(false);
+  const [showLowN, setShowLowN] = useState(false);
 
   const filteredItemIds = useMemo(() => new Set(items.map((i) => i.id)), [items]);
 
@@ -175,7 +176,7 @@ export default function DraftApp({
         </div>
 
         <Card header={<HeroPickerButton />}>
-          {foeHeroResult ? <HeroItemTable data={foeHeroResult} debug={debug} /> :
+          {foeHeroResult ? <HeroItemTable data={foeHeroResult} debug={debug} minGames={showLowN ? 0 : 100} /> :
             <div className="flex-1 flex items-center justify-center p-8">
               <p className="text-sm text-zinc-500">Pick an enemy hero to see what items are bought against them</p>
             </div>}
@@ -188,13 +189,23 @@ export default function DraftApp({
         </div>
 
         <Card header={<ItemPickerButton />}>
-          {foeItemResult ? <ItemHeroTable data={foeItemResult} debug={debug} /> :
+          {foeItemResult ? <ItemHeroTable data={foeItemResult} debug={debug} minGames={showLowN ? 0 : 100} /> :
             <div className="flex-1 flex items-center justify-center p-8">
               <p className="text-sm text-zinc-500">Pick an item to see which enemy heroes it&apos;s bought against</p>
             </div>}
         </Card>
-        {/* Debug toggle */}
-        <div className="flex justify-center pt-4 pb-2">
+        {/* Bottom toggles */}
+        <div className="flex justify-center gap-2 pt-4 pb-2">
+          <button
+            onClick={() => setShowLowN(!showLowN)}
+            className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+              showLowN
+                ? "border-zinc-600 text-zinc-300 bg-zinc-800"
+                : "border-zinc-800 text-zinc-600 hover:text-zinc-400 hover:border-zinc-700"
+            }`}
+          >
+            {showLowN ? "Hide N<100" : "Show N<100"}
+          </button>
           <button
             onClick={() => setDebug(!debug)}
             className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
