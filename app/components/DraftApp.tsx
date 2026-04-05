@@ -226,7 +226,7 @@ export default function DraftApp({
                 : "border-zinc-800 text-zinc-600 hover:text-zinc-400 hover:border-zinc-700"
             }`}
           >
-            {debug ? "Hide debug" : "Debug"}
+            {debug ? "Hide CI & N" : "CI & N"}
           </button>
         </div>
       </main>
