@@ -38,6 +38,7 @@ export default async function Page() {
         name,
         dname: item.dname,
         cost: item.cost,
+        basic: !item.components || item.components.length === 0,
       }));
   } catch {
     // OpenDota unreachable — app still renders, pickers will be empty

@@ -9,6 +9,7 @@ export interface ItemOption {
   name: string; // internal name e.g. "blink"
   dname: string; // display name e.g. "Blink Dagger"
   cost: number;
+  basic: boolean; // true = no components (bought directly from shop)
 }
 
 interface Props {

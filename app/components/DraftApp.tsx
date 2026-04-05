@@ -52,8 +52,10 @@ export default function DraftApp({
   const [showItemPicker, setShowItemPicker] = useState(false);
   const [debug, setDebug] = useState(false);
   const [showLowN, setShowLowN] = useState(false);
+  const [showBasic, setShowBasic] = useState(false);
 
   const filteredItemIds = useMemo(() => new Set(items.map((i) => i.id)), [items]);
+  const basicItemIds = useMemo(() => new Set(items.filter((i) => i.basic).map((i) => i.id)), [items]);
 
   // ─── Computed results (instant, no API calls) ─────────────────────────────
 
@@ -176,7 +178,7 @@ export default function DraftApp({
         </div>
 
         <Card header={<HeroPickerButton />}>
-          {foeHeroResult ? <HeroItemTable data={foeHeroResult} debug={debug} minGames={showLowN ? 0 : 100} /> :
+          {foeHeroResult ? <HeroItemTable data={foeHeroResult} debug={debug} minGames={showLowN ? 0 : 100} hideBasic={!showBasic} basicItemIds={basicItemIds} /> :
             <div className="flex-1 flex items-center justify-center p-8">
               <p className="text-sm text-zinc-500">Pick an enemy hero to see what items are bought against them</p>
             </div>}
@@ -195,7 +197,17 @@ export default function DraftApp({
             </div>}
         </Card>
         {/* Bottom toggles */}
-        <div className="flex justify-center gap-2 pt-4 pb-2">
+        <div className="flex justify-center gap-2 pt-4 pb-2 flex-wrap">
+          <button
+            onClick={() => setShowBasic(!showBasic)}
+            className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+              showBasic
+                ? "border-zinc-600 text-zinc-300 bg-zinc-800"
+                : "border-zinc-800 text-zinc-600 hover:text-zinc-400 hover:border-zinc-700"
+            }`}
+          >
+            {showBasic ? "Hide basic items" : "Show basic items"}
+          </button>
           <button
             onClick={() => setShowLowN(!showLowN)}
             className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
