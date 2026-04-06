@@ -55,6 +55,7 @@ interface ValveMatch {
   match_id: number;
   match_seq_num: number;
   radiant_win: boolean;
+  start_time: number; // unix epoch
   game_mode: number;
   lobby_type: number;
   human_players: number;
@@ -240,6 +241,60 @@ function writeDataJson() {
   console.log(`[harvest] Wrote data.json: ${jsonMarginals.length} marginals, ${jsonTotals.length} totals (${sizeKB} KB)`);
 }
 
+// ─── Skip-to-today: binary search for recent matches ────────────────────────
+
+const MAX_AGE_HOURS = 24; // if matches are older than this, skip ahead
+
+async function findRecentSeq(currentSeq: number): Promise<number> {
+  // Probe the current position to see how old it is
+  const probe = await fetchBatch(currentSeq);
+  if (probe.length === 0) return currentSeq;
+
+  const matchAge = Date.now() / 1000 - probe[0].start_time;
+  const ageHours = matchAge / 3600;
+  if (ageHours <= MAX_AGE_HOURS) {
+    console.log(`[harvest] Current seq is ${ageHours.toFixed(1)}h old — no skip needed`);
+    return currentSeq;
+  }
+
+  console.log(`[harvest] Current seq is ${ageHours.toFixed(1)}h old — binary searching for today's matches...`);
+
+  // Binary search: find a seq whose matches are within MAX_AGE_HOURS
+  // Upper bound: estimate ~500K seq numbers per hour based on typical Dota match volume
+  let lo = currentSeq;
+  let hi = currentSeq + Math.ceil(ageHours * 500_000);
+
+  for (let i = 0; i < 15; i++) { // max 15 iterations for convergence
+    const mid = Math.floor((lo + hi) / 2);
+    await sleep(DELAY_MS);
+    const batch = await fetchBatch(mid);
+
+    if (batch.length === 0) {
+      // Overshot — no matches yet at this seq
+      hi = mid;
+      continue;
+    }
+
+    const midAge = (Date.now() / 1000 - batch[0].start_time) / 3600;
+    console.log(`[harvest]   probe seq ${mid}: ${midAge.toFixed(1)}h old`);
+
+    if (midAge > MAX_AGE_HOURS) {
+      lo = mid;
+    } else if (midAge < 1) {
+      // Too recent — we want ~MAX_AGE_HOURS ago to not miss data
+      hi = mid;
+    } else {
+      // Within 1-24 hours — good enough
+      console.log(`[harvest] Found recent seq: ${mid} (${midAge.toFixed(1)}h ago)`);
+      return mid;
+    }
+  }
+
+  // Fallback to lo — at least it's closer than where we started
+  console.log(`[harvest] Binary search converged to seq ${lo}`);
+  return lo;
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -273,6 +328,9 @@ async function main() {
       console.log(`[harvest] Merged existing data: ${matchLevel.size} marginals, ${heroTotals.size} totals`);
     }
   }
+
+  // Skip ahead to recent matches if current position is too far in the past
+  startSeq = await findRecentSeq(startSeq);
 
   console.log(`[harvest] Starting from seq ${startSeq}, target ${maxMatches} ranked matches`);
   console.log(`[harvest] Est. time: ${Math.round(maxMatches / 360_000 * 60)} min (assuming ~30% ranked yield)`);

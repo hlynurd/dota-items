@@ -130,6 +130,8 @@ export interface ItemHeroEntry {
   wr_with: number;      // WR when this item is bought against this hero
   wr_without: number;   // WR when this item is NOT bought against this hero
   diff: number;         // positive = buying this item against this hero is good
+  excess_wr: number;    // diff minus item's global avg WR diff (removes gold bias)
+  zscore: number;       // how many stddevs this matchup's WR diff is from the item's mean
   buy_rate: number;     // multiplier vs baseline: 1.5 = bought 1.5x more against this hero
   match_games: number;  // number of matches where item was bought against this hero
 }
@@ -151,6 +153,8 @@ export interface HeroItemEntry {
   wr_with: number;      // WR when this item is bought (given hero context)
   wr_without: number;   // WR when this item is NOT bought
   diff: number;         // wr_with - wr_without
+  excess_wr: number;    // diff minus item's global avg WR diff (removes gold bias)
+  zscore: number;       // how many stddevs this matchup's WR diff is from the item's mean
   match_games: number;
 }
 

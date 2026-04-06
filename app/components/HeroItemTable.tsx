@@ -4,12 +4,14 @@ import { useState, useMemo } from "react";
 import type { HeroLookupResult, HeroItemEntry } from "@/lib/agent/types";
 import { itemImgUrl } from "@/lib/utils/cdn";
 
-type SortKey = "display_name" | "buy_rate" | "wr_diff" | "match_games";
+type SortKey = "display_name" | "buy_rate" | "wr_diff" | "excess_wr" | "zscore" | "match_games";
 
 const COLUMN_TOOLTIPS: Record<string, string> = {
   display_name: "Item name",
   buy_rate: "How much more this item is bought vs average (1.0x = normal)",
   wr_diff: "Win rate difference (With item minus Without)",
+  excess_wr: "WR Diff minus item's global average WR Diff — removes gold/cost bias",
+  zscore: "How many std deviations this matchup is from the item's average WR Diff",
   match_games: "Number of matches in sample",
 };
 
@@ -40,9 +42,13 @@ function ItemRow({ item, debug }: { item: HeroItemEntry; debug: boolean }) {
   const diffColor = item.diff >= 0.005 ? "text-green-400" : item.diff <= -0.005 ? "text-red-400" : "text-zinc-600";
   const buyColor = item.buy_rate >= 1.2 ? "text-green-400" : item.buy_rate <= 0.8 ? "text-red-400" : "text-zinc-400";
 
-  const wrWith = item.wr_with;
-  const ciWith = ci95(wrWith, item.match_games);
-  const ciDiff = ci95(Math.abs(item.diff), item.match_games); // approximate CI for the diff
+  const excessPct = (Math.abs(item.excess_wr) * 100).toFixed(1);
+  const excessSign = item.excess_wr >= 0 ? "+" : "-";
+  const excessColor = item.excess_wr >= 0.005 ? "text-green-400" : item.excess_wr <= -0.005 ? "text-red-400" : "text-zinc-600";
+
+  const zColor = item.zscore >= 1.0 ? "text-green-400" : item.zscore <= -1.0 ? "text-red-400" : "text-zinc-500";
+
+  const ciDiff = ci95(Math.abs(item.diff), item.match_games);
 
   return (
     <div className="flex items-center gap-2 py-1.5 border-b border-zinc-800/50 last:border-0 hover:bg-zinc-800/40 rounded-sm transition-colors">
@@ -58,6 +64,12 @@ function ItemRow({ item, debug }: { item: HeroItemEntry; debug: boolean }) {
       <span className={`text-xs font-mono shrink-0 ${debug ? "w-28" : "w-14"} text-right ${diffColor}`}>
         {diffSign}{diffPct}%{debug && <span className="text-zinc-600"> ±{(ciDiff * 100).toFixed(1)}%</span>}
       </span>
+      <span className={`text-xs font-mono shrink-0 w-14 text-right ${excessColor}`}>
+        {excessSign}{excessPct}%
+      </span>
+      <span className={`text-xs font-mono shrink-0 w-10 text-right ${zColor}`}>
+        {item.zscore >= 0 ? "+" : ""}{item.zscore.toFixed(1)}
+      </span>
       {debug && (
         <span className="text-xs text-zinc-600 font-mono shrink-0 w-10 text-right">({item.match_games.toLocaleString()})</span>
       )}
@@ -66,7 +78,7 @@ function ItemRow({ item, debug }: { item: HeroItemEntry; debug: boolean }) {
 }
 
 export default function HeroItemTable({ data, debug = false, minGames = 0, hideBasic = false, basicItemIds }: { data: HeroLookupResult; debug?: boolean; minGames?: number; hideBasic?: boolean; basicItemIds?: Set<number> }) {
-  const [sortKey, setSortKey] = useState<SortKey>("buy_rate");
+  const [sortKey, setSortKey] = useState<SortKey>("excess_wr");
   const [ascending, setAscending] = useState(false);
 
   function handleSort(key: SortKey) {
@@ -94,6 +106,8 @@ export default function HeroItemTable({ data, debug = false, minGames = 0, hideB
         <SortHeader label="Item" sortKey="display_name" active={sortKey === "display_name"} ascending={ascending} onClick={handleSort} className="flex-1 !text-left" />
         <SortHeader label="Buy" sortKey="buy_rate" active={sortKey === "buy_rate"} ascending={ascending} onClick={handleSort} className="shrink-0 w-12" />
         <SortHeader label="WR Diff" sortKey="wr_diff" active={sortKey === "wr_diff"} ascending={ascending} onClick={handleSort} className={`shrink-0 ${debug ? "w-28" : "w-14"}`} />
+        <SortHeader label="Excess" sortKey="excess_wr" active={sortKey === "excess_wr"} ascending={ascending} onClick={handleSort} className="shrink-0 w-14" />
+        <SortHeader label="Z" sortKey="zscore" active={sortKey === "zscore"} ascending={ascending} onClick={handleSort} className="shrink-0 w-10" />
         {debug && (
           <SortHeader label="N" sortKey="match_games" active={sortKey === "match_games"} ascending={ascending} onClick={handleSort} className="shrink-0 w-10" />
         )}

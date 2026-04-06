@@ -41,6 +41,10 @@ export interface IndexedData {
   heroTotals: Map<string, HeroTotal>;
   /** Map<"item_id:side", number> — avg purchase rate across all heroes for this item+side */
   itemBaselineRates: Map<string, number>;
+  /** Map<"item_id:side", number> — mean WR diff across all hero matchups for this item */
+  itemGlobalWrDiff: Map<string, number>;
+  /** Map<"item_id:side", number> — stddev of WR diff across all hero matchups for this item */
+  itemWrDiffStd: Map<string, number>;
   /** Set of item_ids that have data */
   itemIdsWithData: Set<number>;
   ts: number;
@@ -90,7 +94,30 @@ export function indexStaticData(raw: StaticData): IndexedData {
     if (count > 0) itemBaselineRates.set(key, sumRates / count);
   }
 
-  return { byHero, byItem, heroTotals, itemBaselineRates, itemIdsWithData, ts: raw.ts };
+  // Compute per-item global WR diff mean + stddev (across all hero matchups)
+  const itemGlobalWrDiff = new Map<string, number>();
+  const itemWrDiffStd = new Map<string, number>();
+  for (const [key, rows] of byItem) {
+    const side = key.split(":")[1];
+    const diffs: number[] = [];
+    for (const row of rows) {
+      const ht = heroTotals.get(`${row.context_hero_id}:${side}`);
+      if (!ht || ht.total_matches === 0 || row.match_games < 5) continue;
+      const wrWith = row.match_wins / row.match_games;
+      const withoutGames = ht.total_matches - row.match_games;
+      const withoutWins = ht.total_wins - row.match_wins;
+      const wrWithout = withoutGames > 0 ? withoutWins / withoutGames : 0;
+      diffs.push(wrWith - wrWithout);
+    }
+    if (diffs.length > 0) {
+      const mean = diffs.reduce((s, d) => s + d, 0) / diffs.length;
+      itemGlobalWrDiff.set(key, mean);
+      const variance = diffs.reduce((s, d) => s + (d - mean) ** 2, 0) / diffs.length;
+      itemWrDiffStd.set(key, Math.sqrt(variance));
+    }
+  }
+
+  return { byHero, byItem, heroTotals, itemBaselineRates, itemGlobalWrDiff, itemWrDiffStd, itemIdsWithData, ts: raw.ts };
 }
 
 // ─── Compute functions (replace API routes) ─────────────────────────────────
@@ -120,6 +147,11 @@ export function computeHeroLookup(
       const baseline = data.itemBaselineRates.get(`${r.item_id}:${side}`) ?? heroRate;
       const buyRate = baseline > 0 ? heroRate / baseline : 1;
       const info = itemsById.get(r.item_id);
+      const itemKey = `${r.item_id}:${side}`;
+      const globalDiff = data.itemGlobalWrDiff.get(itemKey) ?? 0;
+      const std = data.itemWrDiffStd.get(itemKey) ?? 0;
+      const excessWr = diff - globalDiff;
+      const zscore = std > 0.001 ? (diff - globalDiff) / std : 0;
       return {
         item_id: r.item_id,
         item_name: info?.name ?? "unknown",
@@ -128,6 +160,8 @@ export function computeHeroLookup(
         wr_with: Math.round(wrWith * 10000) / 10000,
         wr_without: Math.round(wrWithout * 10000) / 10000,
         diff: Math.round(diff * 10000) / 10000,
+        excess_wr: Math.round(excessWr * 10000) / 10000,
+        zscore: Math.round(zscore * 100) / 100,
         match_games: r.match_games,
       };
     });
@@ -152,6 +186,11 @@ export function computeItemLookup(
   });
   const avgRate = rates.length > 0 ? rates.reduce((s, r) => s + r, 0) / rates.length : 1;
 
+  // Get global WR diff stats for this item
+  const itemKey = `${itemId}:${side}`;
+  const globalDiff = data.itemGlobalWrDiff.get(itemKey) ?? 0;
+  const std = data.itemWrDiffStd.get(itemKey) ?? 0;
+
   const heroes: ItemHeroEntry[] = rows.map((r) => {
     const ht = data.heroTotals.get(`${r.context_hero_id}:${side}`);
     const totalMatches = ht?.total_matches ?? 0;
@@ -161,6 +200,8 @@ export function computeItemLookup(
     const withoutWins = totalWins - r.match_wins;
     const wrWithout = withoutGames > 0 ? withoutWins / withoutGames : 0;
     const diff = wrWith - wrWithout;
+    const excessWr = diff - globalDiff;
+    const zscore = std > 0.001 ? (diff - globalDiff) / std : 0;
     const heroRate = totalMatches > 0 ? r.match_games / totalMatches : 0;
     const buyRate = avgRate > 0 ? heroRate / avgRate : 1;
     const hero = heroesById.get(r.context_hero_id);
@@ -171,6 +212,8 @@ export function computeItemLookup(
       wr_with: Math.round(wrWith * 10000) / 10000,
       wr_without: Math.round(wrWithout * 10000) / 10000,
       diff: Math.round(diff * 10000) / 10000,
+      excess_wr: Math.round(excessWr * 10000) / 10000,
+      zscore: Math.round(zscore * 100) / 100,
       buy_rate: Math.round(buyRate * 100) / 100,
       match_games: r.match_games,
     };
