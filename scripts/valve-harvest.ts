@@ -13,7 +13,7 @@
 import { config } from "dotenv";
 config({ path: ".env.local" });
 
-import { writeFileSync, readFileSync, existsSync } from "fs";
+import { writeFileSync, readFileSync, existsSync, appendFileSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
 
@@ -78,6 +78,40 @@ interface ApiResponse {
     status: number;
     matches: ValveMatch[];
   };
+}
+
+// ─── Raw match log (NDJSON for future 5v5 project) ──────────────────────────
+
+const RAW_LOG_PATH = join(process.cwd(), "data", "matches.ndjson");
+let rawBuffer: string[] = [];
+
+/**
+ * Log a ranked match as a compact NDJSON row.
+ * Schema per line: { m: match_id, w: radiant_win(0|1), d: duration,
+ *   r: [[hero_id, [item_ids...]], ...],  // radiant 5 players
+ *   d: [[hero_id, [item_ids...]], ...]   // dire 5 players
+ * }
+ */
+function logRawMatch(match: ValveMatch) {
+  const radiant: [number, number[]][] = [];
+  const dire: [number, number[]][] = [];
+  for (const p of match.players) {
+    const items = [p.item_0, p.item_1, p.item_2, p.item_3, p.item_4, p.item_5].filter(id => id !== 0);
+    const entry: [number, number[]] = [p.hero_id, items];
+    if (p.player_slot < 128) radiant.push(entry);
+    else dire.push(entry);
+  }
+  rawBuffer.push(JSON.stringify({ m: match.match_id, w: match.radiant_win ? 1 : 0, s: match.duration, r: radiant, e: dire }));
+}
+
+function flushRawBuffer() {
+  if (rawBuffer.length === 0) return;
+  appendFileSync(RAW_LOG_PATH, rawBuffer.join("\n") + "\n");
+  const totalLines = existsSync(RAW_LOG_PATH)
+    ? readFileSync(RAW_LOG_PATH, "utf-8").split("\n").filter(Boolean).length
+    : rawBuffer.length;
+  console.log(`[harvest] Flushed ${rawBuffer.length} raw matches → ${RAW_LOG_PATH} (${totalLines} total)`);
+  rawBuffer = [];
 }
 
 // ─── Accumulators ────────────────────────────────────────────────────────────
@@ -276,9 +310,13 @@ async function main() {
       if (match.human_players !== 10) continue;
       if (match.duration < 600) continue; // skip very short games (<10 min)
 
+      logRawMatch(match);
       processMatch(match);
       rankedProcessed++;
     }
+
+    // Flush raw log every 1K matches
+    if (rawBuffer.length >= 1000) flushRawBuffer();
 
     if (calls % 100 === 0) {
       const elapsed = (Date.now() - startTime) / 1000;
@@ -304,6 +342,8 @@ async function main() {
 
     await sleep(DELAY_MS);
   }
+
+  flushRawBuffer(); // flush remaining raw matches
 
   const elapsed = Math.round((Date.now() - startTime) / 1000);
   console.log(`[harvest] Done. ${rankedProcessed.toLocaleString()} ranked matches from ${totalFetched.toLocaleString()} total in ${elapsed}s (${calls} API calls)`);
