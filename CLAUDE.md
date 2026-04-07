@@ -79,7 +79,13 @@ The main page has two stacked cards, both focused on enemy-side data:
 | **By Item** | Pick item → enemy heroes it's bought against |
 
 Each card has a picker header and an internally-scrolling sortable table.
-Columns: Item/Hero thumbnail, Name, Buy rate (Nx), WR Diff %.
+Columns: Item/Hero thumbnail, Name, Buy rate (Nx), WR Diff %, Excess WR %, Z-score.
+
+### Excess WR and Z-score columns
+- **Excess WR** = matchup WR Diff minus the item's global average WR Diff across all matchups. Removes gold/cost bias — expensive items (Assault Cuirass) no longer appear universally positive. Counter items (Rod of Atos) show positive when genuinely useful.
+- **Z-score** = (WR Diff - item mean) / item stddev. How many standard deviations this matchup is from the item's average. High Z = unusually good/bad for this specific matchup.
+- Both are computed in `indexStaticData()` via `itemGlobalWrDiff` and `itemWrDiffStd` Maps.
+- Default sort is Excess WR (not raw WR Diff or Buy rate).
 
 ## Key Types (defined in lib/agent/types.ts)
 
@@ -145,6 +151,7 @@ Streaming aggregation — fetches matches from Valve's API, accumulates counters
 - Supports `--merge` flag to seed accumulators from existing data.json
 - Default start: seq 7,350,000,000 (patch 7.41a, March 27 2026)
 - Rate: ~10 calls/min, ~42K ranked matches/hour
+- **Skip-to-today**: parses `start_time` from API response. If matches are >24h old, binary searches forward to find recent sequence (~15 API calls).
 - Run: `npm run valve-harvest` or `npm run valve-harvest -- --max 1000000 --seq 7350000000 --merge`
 
 ### Continuous Local Harvesting (`scripts/harvest-escalating.sh`)
