@@ -81,6 +81,66 @@ interface ApiResponse {
   };
 }
 
+// ─── Rank filtering via OpenDota publicMatches ──────────────────────────────
+
+const OPENDOTA_PUBLIC = "https://api.opendota.com/api/publicMatches";
+// Map<match_id, avg_rank_tier>
+const rankCache = new Map<number, number>();
+let rankCacheHighWater = 0; // highest match_id we've fetched rank data for
+
+/**
+ * Fetch Legend+ ranked match IDs from OpenDota publicMatches.
+ * Populates rankCache with match_id → avg_rank_tier.
+ * Returns the number of new entries added.
+ */
+async function fetchRankWindow(minRank: number, lessThanMatchId?: number): Promise<number> {
+  const params = new URLSearchParams({
+    min_rank: String(minRank),
+    lobby_type: "7", // ranked
+  });
+  if (lessThanMatchId) params.set("less_than_match_id", String(lessThanMatchId));
+  const url = `${OPENDOTA_PUBLIC}?${params}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return 0;
+    const matches = (await res.json()) as { match_id: number; avg_rank_tier: number; match_seq_num: number }[];
+    let added = 0;
+    for (const m of matches) {
+      if (!rankCache.has(m.match_id)) {
+        rankCache.set(m.match_id, m.avg_rank_tier);
+        added++;
+      }
+      if (m.match_id > rankCacheHighWater) rankCacheHighWater = m.match_id;
+    }
+    return added;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Pre-fill the rank cache with a broad window of recent Legend+ matches.
+ * Fetches multiple pages to build a substantial lookup set.
+ */
+async function warmRankCache(minRank: number): Promise<void> {
+  console.log(`[harvest] Warming rank cache (min_rank=${minRank})...`);
+  let cursor: number | undefined;
+  let total = 0;
+  for (let page = 0; page < 20; page++) { // up to 2000 match IDs
+    const added = await fetchRankWindow(minRank, cursor);
+    total += added;
+    if (added === 0) break;
+    // Paginate: find the lowest match_id in the current cache for next page
+    let minId = Infinity;
+    for (const [id] of rankCache) {
+      if (id < minId) minId = id;
+    }
+    cursor = minId;
+    await sleep(1100); // OpenDota rate limit: ~1 req/sec without API key
+  }
+  console.log(`[harvest] Rank cache warmed: ${total} Legend+ match IDs loaded`);
+}
+
 // ─── Raw match log (NDJSON for future 5v5 project) ──────────────────────────
 
 const RAW_LOG_PATH = join(process.cwd(), "data", "matches.ndjson");
@@ -93,7 +153,7 @@ let rawBuffer: string[] = [];
  *   d: [[hero_id, [item_ids...]], ...]   // dire 5 players
  * }
  */
-function logRawMatch(match: ValveMatch) {
+function logRawMatch(match: ValveMatch, avgRankTier?: number) {
   const radiant: [number, number[]][] = [];
   const dire: [number, number[]][] = [];
   for (const p of match.players) {
@@ -102,7 +162,9 @@ function logRawMatch(match: ValveMatch) {
     if (p.player_slot < 128) radiant.push(entry);
     else dire.push(entry);
   }
-  rawBuffer.push(JSON.stringify({ m: match.match_id, w: match.radiant_win ? 1 : 0, s: match.duration, r: radiant, e: dire }));
+  const row: Record<string, unknown> = { m: match.match_id, w: match.radiant_win ? 1 : 0, s: match.duration, r: radiant, e: dire };
+  if (avgRankTier !== undefined) row.k = avgRankTier; // k = rank tier
+  rawBuffer.push(JSON.stringify(row));
 }
 
 function flushRawBuffer() {
@@ -304,6 +366,7 @@ async function main() {
   let merge = false;
   let deploy = false;
   let checkpointEvery = 50_000;
+  let minRank = 0; // 0 = no filter, 50 = Legend+, 60 = Ancient+, 70 = Divine+
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--max" && args[i + 1]) maxMatches = parseInt(args[i + 1]);
@@ -311,6 +374,7 @@ async function main() {
     if (args[i] === "--merge") merge = true;
     if (args[i] === "--deploy") deploy = true;
     if (args[i] === "--checkpoint" && args[i + 1]) checkpointEvery = parseInt(args[i + 1]);
+    if (args[i] === "--min-rank" && args[i + 1]) minRank = parseInt(args[i + 1]);
   }
 
   // Seed accumulators from existing data.json if --merge
@@ -332,7 +396,12 @@ async function main() {
   // Skip ahead to recent matches if current position is too far in the past
   startSeq = await findRecentSeq(startSeq);
 
-  console.log(`[harvest] Starting from seq ${startSeq}, target ${maxMatches} ranked matches`);
+  // Warm rank cache if filtering by rank
+  if (minRank > 0) {
+    await warmRankCache(minRank);
+  }
+
+  console.log(`[harvest] Starting from seq ${startSeq}, target ${maxMatches} ranked matches${minRank > 0 ? ` (min rank: ${minRank})` : ""}`);
   console.log(`[harvest] Est. time: ${Math.round(maxMatches / 360_000 * 60)} min (assuming ~30% ranked yield)`);
 
   let seq = startSeq;
@@ -368,9 +437,18 @@ async function main() {
       if (match.human_players !== 10) continue;
       if (match.duration < 600) continue; // skip very short games (<10 min)
 
-      logRawMatch(match);
+      // Rank filter: only process if match is in the Legend+ set
+      const rankTier = rankCache.get(match.match_id);
+      if (minRank > 0 && !rankTier) continue;
+
+      logRawMatch(match, rankTier);
       processMatch(match);
       rankedProcessed++;
+    }
+
+    // Periodically refresh rank cache (every 500 calls ≈ every ~50min)
+    if (minRank > 0 && calls % 500 === 0) {
+      await fetchRankWindow(minRank); // fetch latest page
     }
 
     // Flush raw log every 1K matches
@@ -379,7 +457,8 @@ async function main() {
     if (calls % 100 === 0) {
       const elapsed = (Date.now() - startTime) / 1000;
       const rate = Math.round(rankedProcessed / elapsed * 3600);
-      console.log(`[harvest] ${rankedProcessed.toLocaleString()} ranked / ${totalFetched.toLocaleString()} total | ${calls} calls | ${Math.round(elapsed)}s | ${rate.toLocaleString()}/hr | seq ${seq}`);
+      const rankInfo = minRank > 0 ? ` | rank cache: ${rankCache.size.toLocaleString()}` : "";
+      console.log(`[harvest] ${rankedProcessed.toLocaleString()} ranked / ${totalFetched.toLocaleString()} total | ${calls} calls | ${Math.round(elapsed)}s | ${rate.toLocaleString()}/hr | seq ${seq}${rankInfo}`);
     }
 
     // Save checkpoint + optionally deploy

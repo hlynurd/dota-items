@@ -23,7 +23,7 @@ run_chunk() {
   local CHUNK=$1
   echo "[escalate] $(date): Harvesting $CHUNK matches from seq $START_SEQ (total so far: $TOTAL)..."
 
-  npm run valve-harvest -- --merge --seq "$START_SEQ" --max "$CHUNK" --deploy --checkpoint "$CHUNK" 2>&1
+  npm run valve-harvest -- --merge --seq "$START_SEQ" --max "$CHUNK" --deploy --checkpoint "$CHUNK" --min-rank 50 2>&1
 
   # Extract last seq from the harvest output
   LAST_SEQ=$(grep "seq [0-9]" /tmp/harvest-escalating.log | tail -1 | grep -o 'seq [0-9]*' | tail -1 | awk '{print $2}')
