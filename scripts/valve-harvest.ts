@@ -119,26 +119,29 @@ async function fetchRankWindow(minRank: number, lessThanMatchId?: number): Promi
 }
 
 /**
- * Pre-fill the rank cache with a broad window of recent Legend+ matches.
- * Fetches multiple pages to build a substantial lookup set.
+ * Fill rank cache around a specific match_id window.
+ * OpenDota publicMatches with less_than_match_id paginates backward from a given match.
+ * We need to fetch pages that overlap with the Valve API's current position.
  */
-async function warmRankCache(minRank: number): Promise<void> {
-  console.log(`[harvest] Warming rank cache (min_rank=${minRank})...`);
-  let cursor: number | undefined;
+async function fillRankCacheAround(minRank: number, aroundMatchId: number): Promise<void> {
+  // Fetch pages starting from slightly above the target match_id
+  let cursor = aroundMatchId + 50000; // start a bit ahead to ensure overlap
   let total = 0;
-  for (let page = 0; page < 20; page++) { // up to 2000 match IDs
+  for (let page = 0; page < 30; page++) { // up to 3000 match IDs
     const added = await fetchRankWindow(minRank, cursor);
     total += added;
     if (added === 0) break;
-    // Paginate: find the lowest match_id in the current cache for next page
+    // Find lowest match_id for next page
     let minId = Infinity;
     for (const [id] of rankCache) {
       if (id < minId) minId = id;
     }
+    // Stop if we've gone far enough below our target
+    if (minId < aroundMatchId - 100000) break;
     cursor = minId;
     await sleep(1100); // OpenDota rate limit: ~1 req/sec without API key
   }
-  console.log(`[harvest] Rank cache warmed: ${total} Legend+ match IDs loaded`);
+  console.log(`[harvest] Rank cache: ${rankCache.size.toLocaleString()} IDs (added ${total} around match ${aroundMatchId})`);
 }
 
 // ─── Raw match log (NDJSON for future 5v5 project) ──────────────────────────
@@ -396,9 +399,14 @@ async function main() {
   // Skip ahead to recent matches if current position is too far in the past
   startSeq = await findRecentSeq(startSeq);
 
-  // Warm rank cache if filtering by rank
+  // Warm rank cache: need a match_id from the current seq position
   if (minRank > 0) {
-    await warmRankCache(minRank);
+    const probe = await fetchBatch(startSeq);
+    if (probe.length > 0) {
+      const probeMatchId = probe[Math.floor(probe.length / 2)].match_id;
+      console.log(`[harvest] Probed match_id ${probeMatchId} at seq ${startSeq}`);
+      await fillRankCacheAround(minRank, probeMatchId);
+    }
   }
 
   console.log(`[harvest] Starting from seq ${startSeq}, target ${maxMatches} ranked matches${minRank > 0 ? ` (min rank: ${minRank})` : ""}`);
@@ -446,9 +454,10 @@ async function main() {
       rankedProcessed++;
     }
 
-    // Periodically refresh rank cache (every 500 calls ≈ every ~50min)
-    if (minRank > 0 && calls % 500 === 0) {
-      await fetchRankWindow(minRank); // fetch latest page
+    // Periodically refresh rank cache around current position (every 200 calls)
+    if (minRank > 0 && calls % 200 === 0 && matches.length > 0) {
+      const currentMatchId = matches[Math.floor(matches.length / 2)].match_id;
+      await fillRankCacheAround(minRank, currentMatchId);
     }
 
     // Flush raw log every 1K matches
