@@ -120,26 +120,35 @@ async function fetchRankWindow(minRank: number, lessThanMatchId?: number): Promi
 
 /**
  * Fill rank cache around a specific match_id window.
- * OpenDota publicMatches with less_than_match_id paginates backward from a given match.
- * We need to fetch pages that overlap with the Valve API's current position.
+ * OpenDota publicMatches with less_than_match_id paginates backward.
+ * We paginate forward from the target (above) and backward (below).
  */
 async function fillRankCacheAround(minRank: number, aroundMatchId: number): Promise<void> {
-  // Fetch pages starting from slightly above the target match_id
-  let cursor = aroundMatchId + 50000; // start a bit ahead to ensure overlap
   let total = 0;
-  for (let page = 0; page < 30; page++) { // up to 3000 match IDs
+  // Forward: fetch pages above the target (future matches relative to current Valve position)
+  let cursor = aroundMatchId + 200000; // well ahead
+  for (let page = 0; page < 10; page++) {
     const added = await fetchRankWindow(minRank, cursor);
     total += added;
     if (added === 0) break;
-    // Find lowest match_id for next page
+    // Next page: lowest ID from this batch
     let minId = Infinity;
-    for (const [id] of rankCache) {
-      if (id < minId) minId = id;
-    }
-    // Stop if we've gone far enough below our target
-    if (minId < aroundMatchId - 100000) break;
+    for (const [key, val] of rankCache) { if (key < minId) minId = key; }
+    if (minId <= aroundMatchId) break; // reached our target area
     cursor = minId;
-    await sleep(1100); // OpenDota rate limit: ~1 req/sec without API key
+    await sleep(1100);
+  }
+  // Backward: fetch pages below the target (past matches)
+  cursor = aroundMatchId + 1;
+  for (let page = 0; page < 20; page++) {
+    const added = await fetchRankWindow(minRank, cursor);
+    total += added;
+    if (added === 0) break;
+    let minId = Infinity;
+    for (const [key] of rankCache) { if (key < minId) minId = key; }
+    if (minId < aroundMatchId - 500000) break; // far enough behind
+    cursor = minId;
+    await sleep(1100);
   }
   console.log(`[harvest] Rank cache: ${rankCache.size.toLocaleString()} IDs (added ${total} around match ${aroundMatchId})`);
 }
