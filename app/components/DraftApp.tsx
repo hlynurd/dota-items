@@ -20,16 +20,20 @@ interface SelectedHero {
 }
 
 export default function DraftApp({
-  heroes, items, staticData,
+  heroes, items, staticData, legendData,
 }: {
   heroes: OpenDotaHero[];
   items: ItemOption[];
   staticData: StaticData | null;
+  legendData?: StaticData | null;
 }) {
+  const [legendOnly, setLegendOnly] = useState(false);
+  const activeData = legendOnly && legendData ? legendData : staticData;
+
   // Index static data once
   const indexed = useMemo<IndexedData | null>(
-    () => staticData ? indexStaticData(staticData) : null,
-    [staticData]
+    () => activeData ? indexStaticData(activeData) : null,
+    [activeData]
   );
 
   // Lookup maps for resolving IDs to names
@@ -198,6 +202,18 @@ export default function DraftApp({
         </Card>
         {/* Bottom toggles */}
         <div className="flex justify-center gap-2 pt-4 pb-2 flex-wrap">
+          {legendData && (
+            <button
+              onClick={() => setLegendOnly(!legendOnly)}
+              className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                legendOnly
+                  ? "border-yellow-700 text-yellow-400 bg-yellow-950"
+                  : "border-zinc-800 text-zinc-600 hover:text-zinc-400 hover:border-zinc-700"
+              }`}
+            >
+              {legendOnly ? "Legend+ only" : "All ranks"}
+            </button>
+          )}
           <button
             onClick={() => setShowBasic(!showBasic)}
             className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${

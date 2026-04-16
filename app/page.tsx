@@ -7,8 +7,8 @@ import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import DraftApp from "./components/DraftApp";
 
-function loadStaticData(): StaticData | null {
-  const p = join(process.cwd(), "public", "data.json");
+function loadStaticData(filename: string): StaticData | null {
+  const p = join(process.cwd(), "public", filename);
   if (!existsSync(p)) return null;
   return JSON.parse(readFileSync(p, "utf-8")) as StaticData;
 }
@@ -21,13 +21,16 @@ export default async function Page() {
   try {
     const [h, itemsMap] = await Promise.all([getHeroes(), getItemsMap()]);
     heroes = h;
-    staticData = loadStaticData();
+    staticData = loadStaticData("data.json");
+    const legendData = loadStaticData("data-legend.json");
 
-    // Build set of item IDs that have data in the static JSON
+    // Build set of item IDs that have data in either JSON
     const itemIdsWithData = new Set<number>();
-    if (staticData) {
-      for (const [item_id, , side] of staticData.m) {
-        if (side === "enemy") itemIdsWithData.add(item_id);
+    for (const src of [staticData, legendData]) {
+      if (src) {
+        for (const [item_id, , side] of src.m) {
+          if (side === "enemy") itemIdsWithData.add(item_id);
+        }
       }
     }
 
@@ -44,5 +47,5 @@ export default async function Page() {
     // OpenDota unreachable — app still renders, pickers will be empty
   }
 
-  return <DraftApp heroes={heroes} items={items} staticData={staticData} />;
+  return <DraftApp heroes={heroes} items={items} staticData={staticData} legendData={loadStaticData("data-legend.json")} />;
 }
